@@ -1,0 +1,47 @@
+# ─── Core scientific stack ─────────────────────────────────────────────────────
+numpy>=1.24,<2.0
+scipy>=1.11
+pandas>=2.1
+scikit-learn>=1.4
+matplotlib>=3.8
+seaborn>=0.13
+Pillow>=10.0
+
+# ─── Deep learning (CPU baseline; Colab provides CUDA automatically) ───────────
+torch>=2.2
+torchvision>=0.17
+timm>=0.9              # pretrained vision models
+tensorflow>=2.15
+opencv-python-headless>=4.8
+flask>=3.0
+gevent>=23.9
+
+# ─── Explainability ─────────────────────────────────────────────────────────────
+grad-cam>=1.5          # pytorch-grad-cam
+shap>=0.44
+lime>=0.2
+
+# ─── Medical imaging ────────────────────────────────────────────────────────────
+nibabel>=5.1           # NIfTI I/O
+pydicom>=2.4           # DICOM I/O
+SimpleITK>=2.3
+
+# ─── Notebook / Colab ───────────────────────────────────────────────────────────
+ipywidgets>=8.1
+tqdm>=4.66
+ipython>=8.18
+
+# ─── Data validation & reporting ────────────────────────────────────────────────
+pydantic>=2.5
+rich>=13.7             # coloured console output
+jinja2>=3.1            # HTML report templates
+tabulate>=0.9
+
+# ─── Utilities ──────────────────────────────────────────────────────────────────
+python-dotenv>=1.0
+PyYAML>=6.0
+click>=8.1             # CLI scripts
+
+# ─── Testing ────────────────────────────────────────────────────────────────────
+pytest>=8.0
+pytest-cov>=5.0

@@ -1,0 +1,76 @@
+# ─── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ─── Virtual environments ────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# ─── Jupyter / IPython ────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoint
+profile_default/
+ipython_config.py
+
+# ─── Data & models (never commit raw patient data or large binaries) ──────────
+data/
+*.nii
+*.nii.gz
+*.mha
+*.mhd
+*.dcm
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.onnx
+*.pb
+*.tflite
+*.weights
+*.bin
+*.keras
+
+# ─── Reports & outputs (generated at runtime) ─────────────────────────────────
+reports/outputs/
+reports/*.html
+reports/*.pdf
+
+# ─── IDE / OS ─────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+secrets/
+credentials/
+*.pem
+*.key
+*.token
+token.json
+
+# ─── Coverage / testing ───────────────────────────────────────────────────────
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
