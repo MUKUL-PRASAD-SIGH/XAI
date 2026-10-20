@@ -155,3 +155,23 @@ See [`docs/safety.md`](docs/safety.md) for:
 ---
 
 *Last updated: October 2026*
+
+
+---
+
+## Cross-validated pipeline (current)
+
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/MUKUL-PRASAD-SIGH/XAI/blob/main/notebooks/run_full_cv_colab.ipynb)
+
+One notebook, `notebooks/run_full_cv_colab.ipynb`, runs everything from the dataset zip in Drive:
+
+| Step | Script | Purpose |
+|---|---|---|
+| audit | `01_dataset_audit.py` | duplicates, leakage, source families |
+| classes | `02c_design_classes.py` + `configs/class_hierarchy.json` | merge diagnoses only as far as real case counts require |
+| folds | `02b_make_cv_folds.py` | stratified, grouped 5-fold; own validation set per fold; leak checks |
+| train | `03_train.py` | dropout, mixup, cutout, grayscale layer, AdamW, label smoothing, val-loss stopping |
+| evaluate | `04_evaluate.py` | pooled CV, case-level bootstrap CIs, real majority baseline |
+| probe | `13_cv_probe.py` | frozen-feature logistic regression on the same folds (overfitting check) |
+
+Details: `docs/cross_validation.md`. Pre-CV scripts that were copied from Drive are kept in `legacy/`.

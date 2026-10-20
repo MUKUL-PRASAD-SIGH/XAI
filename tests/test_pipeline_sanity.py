@@ -16,6 +16,8 @@ def test_core_scripts_exist():
         "01_dataset_audit.py",
         "02_rebuild_dataset.py",
         "02b_make_cv_folds.py",
+        "02c_design_classes.py",
+        "13_cv_probe.py",
         "03_train.py",
         "04_evaluate.py",
         "05_diagnostics.py",

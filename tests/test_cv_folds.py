@@ -79,3 +79,43 @@ def test_stratified_grouped_folds(tmp_path):
     for cls in ("normal", "cyst", "tumor"):
         for k in "012":
             assert per[(cls, k)] > 0, f"{cls} missing from test fold {k}"
+
+
+def _design():
+    import importlib.util
+    p = Path(__file__).resolve().parent.parent / "scripts" / "02c_design_classes.py"
+    spec = importlib.util.spec_from_file_location("dc", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+HIER = {"always_separate": ["normal"], "catch_all": "other",
+        "families": {"vent": ["mild", "moderate", "severe"], "pf": ["a", "b"], "x": ["lone"]}}
+
+
+def test_design_merges_small_classes_inside_family():
+    d = _design()
+    g = {"normal": set(range(30)), "mild": set(range(100, 108)), "moderate": set(range(200, 202)),
+         "severe": set(range(300, 303)), "a": set(range(400, 410)), "b": set(range(500, 502)),
+         "lone": {900}}
+    cmap = d.design(g, HIER, min_groups=5, log=lambda *_: None)
+    assert cmap["normal"] == "normal"
+    assert cmap["mild"] == "mild"                      # enough cases, stays separate
+    assert cmap["moderate"] == cmap["severe"] != "mild"  # 2+3 cases merged together
+    assert cmap["a"] == "a" or cmap["a"] == cmap["b"]
+    assert cmap["lone"] == "__exclude__"               # 1 case, nowhere to merge -> dropped
+    # every kept final class has >= 5 independent cases
+    from collections import defaultdict
+    fin = defaultdict(set)
+    for k, v in cmap.items():
+        fin[v] |= g[k]
+    assert all(len(v) >= 5 for k, v in fin.items() if k != "__exclude__")
+
+
+def test_design_confusion_merge():
+    d = _design()
+    rows = [("mild", "moderate")] * 6 + [("moderate", "mild")] * 6 + [("mild", "mild")] * 4 \
+        + [("moderate", "moderate")] * 4 + [("severe", "severe")] * 10
+    cl = d.confusion_clusters(rows, ["mild", "moderate", "severe"], 0.25)
+    assert sorted(map(sorted, cl)) == [["mild", "moderate"], ["severe"]]

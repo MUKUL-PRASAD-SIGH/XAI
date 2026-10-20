@@ -83,6 +83,8 @@ def apply_class_map(recs, cmap, drop=()):
                 unmapped.add(r["label"])
                 continue
             r["label"] = cmap[r["label"]]
+            if r["label"] == "__exclude__":      # set by 02c_design_classes.py
+                continue
         out.append(r)
     if unmapped:
         raise SystemExit(f"class map has no entry for: {', '.join(sorted(unmapped))}")

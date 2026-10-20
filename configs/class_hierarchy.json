@@ -1,0 +1,11 @@
+{
+  "_note": "Anatomical families used by 02c_design_classes.py. Fine classes are only merged INSIDE a family (never across), and only as far as needed to reach --min-groups independent cases per class. Have a clinician review the families.",
+  "always_separate": ["normal"],
+  "catch_all": "other_abnormal",
+  "families": {
+    "ventricular": ["mild-ventriculomegaly", "moderate-ventriculomegaly", "severe-ventriculomegaly", "colphocephaly"],
+    "posterior_fossa": ["cerebellah-hypoplasia", "m-magna", "anold-chiari-malformation"],
+    "forebrain_cavitary": ["holoprosencephaly", "hydracenphaly", "polencephaly"],
+    "focal_lesion": ["arachnoid-cyst", "intracranial-tumor", "intracranial-hemorrdge", "vein-of-galen", "encephalocele"]
+  }
+}

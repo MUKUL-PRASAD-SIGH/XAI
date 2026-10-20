@@ -94,6 +94,36 @@ def build_augmenter(hflip: bool):
     return keras.Sequential(aug, name="augment")
 
 
+def cutout_batch(max_frac=0.25):
+    """Erase one random rectangle per image (filled with the image mean). Stops the
+    network leaning on a single corner overlay / caliper / text label."""
+    def fn(x, y):
+        shp = tf.shape(x)
+        b, h, w = shp[0], shp[1], shp[2]
+        fh = tf.cast(tf.cast(h, tf.float32) * tf.random.uniform([b], 0.08, max_frac), tf.int32)
+        fw = tf.cast(tf.cast(w, tf.float32) * tf.random.uniform([b], 0.08, max_frac), tf.int32)
+        top = tf.cast(tf.random.uniform([b]) * tf.cast(h - fh, tf.float32), tf.int32)
+        left = tf.cast(tf.random.uniform([b]) * tf.cast(w - fw, tf.float32), tf.int32)
+        rows = tf.range(h)[None, :, None]
+        cols = tf.range(w)[None, None, :]
+        inside = ((rows >= top[:, None, None]) & (rows < (top + fh)[:, None, None]) &
+                  (cols >= left[:, None, None]) & (cols < (left + fw)[:, None, None]))
+        keep = tf.cast(~inside, x.dtype)[..., None]
+        mean = tf.reduce_mean(x, axis=[1, 2, 3], keepdims=True)
+        return x * keep + mean * (1 - keep), y
+    return fn
+
+
+def grayscale_layer(name="to_gray"):
+    """Fixed (non-trainable) luminance projection built from a 1x1 conv, so it is
+    saved inside the .keras file (no Lambda) and the app needs no extra step.
+    Removes colour overlays/annotations as a source cue."""
+    luma = np.array([0.299, 0.587, 0.114], np.float32)
+    kernel = np.tile(luma[:, None], (1, 3)).reshape(1, 1, 3, 3)
+    return layers.Conv2D(3, 1, use_bias=False, trainable=False, name=name,
+                         kernel_initializer=keras.initializers.Constant(kernel))
+
+
 def mixup_batch(alpha):
     """Batch-level mixup: blends each image with a shuffled partner. Strong
     regulariser on ~1k-image problems; labels become soft."""
@@ -108,7 +138,7 @@ def mixup_batch(alpha):
 
 
 def make_datasets(data_dir: Path, img_size: int, batch: int, clahe: bool, hflip: bool,
-                  mixup: float = 0.0):
+                  mixup: float = 0.0, cutout: float = 0.0):
     for split in ("train", "valid", "test"):
         for c in CLASS_NAMES:
             (data_dir / split / c).mkdir(parents=True, exist_ok=True)
@@ -138,6 +168,8 @@ def make_datasets(data_dir: Path, img_size: int, batch: int, clahe: bool, hflip:
                 .cache()
                 .shuffle(512, seed=42)
                 .map(lambda x, y: (augmenter(x, training=True), y), num_parallel_calls=AUTOTUNE))
+    if cutout > 0:
+        train_ds = train_ds.map(cutout_batch(cutout), num_parallel_calls=AUTOTUNE)
     if mixup > 0:
         train_ds = train_ds.map(mixup_batch(mixup), num_parallel_calls=AUTOTUNE)
     train_ds = train_ds.prefetch(AUTOTUNE)
@@ -165,10 +197,11 @@ def class_weights_from_dir(train_dir: Path, power: float = 0.5):
 # ==========================================================================
 # models  (all expose a `gradcam_target` layer and take raw 0-255 input)
 # ==========================================================================
-def build_cnn(img_size, separable=False, dropout=0.4):
+def build_cnn(img_size, separable=False, dropout=0.4, gray=True):
     Conv = layers.SeparableConv2D if separable else layers.Conv2D
     inp = keras.Input(shape=(img_size, img_size, 3), name="input_image")
-    x = layers.Rescaling(1.0 / 255.0, name="preprocess")(inp)
+    x = grayscale_layer()(inp) if gray else inp
+    x = layers.Rescaling(1.0 / 255.0, name="preprocess")(x)
 
     # first block always standard conv (separable on 3 channels learns nothing useful)
     x = layers.Conv2D(32, 3, padding="same", use_bias=False)(x)
@@ -195,11 +228,12 @@ def build_cnn(img_size, separable=False, dropout=0.4):
     return keras.Model(inp, out, name="scnn" if separable else "cnn")
 
 
-def build_xception(img_size, dropout=0.3):
+def build_xception(img_size, dropout=0.5, gray=True):
     inp = keras.Input(shape=(img_size, img_size, 3), name="input_image")
     # Xception's preprocess_input == x/127.5 - 1, expressed as a layer so the
     # saved .keras file needs no Lambda and no safe_mode=False on load.
-    x = layers.Rescaling(1.0 / 127.5, offset=-1.0, name="preprocess")(inp)
+    x = grayscale_layer()(inp) if gray else inp
+    x = layers.Rescaling(1.0 / 127.5, offset=-1.0, name="preprocess")(x)
     try:
         base = keras.applications.Xception(include_top=False, weights="imagenet", input_tensor=x)
         feat = base.output
@@ -289,12 +323,13 @@ def train_one(model_key, args, tag=""):
     ckpt = str(out_dir / f"best_model_{model_key}{tag}.keras")
 
     train_ds, val_ds, _ = make_datasets(Path(args.data), img_size, args.batch_size,
-                                        args.clahe, not args.no_hflip, args.mixup)
+                                        args.clahe, not args.no_hflip, args.mixup, args.cutout)
     cw, counts = class_weights_from_dir(Path(args.data) / "train", args.cw_power)
     print("\nTrain images per class:", {CLASS_NAMES[i]: c for i, c in sorted(counts.items()) if c})
 
     if model_key == "xception":
-        model, base = build_xception(img_size, dropout=args.dropout if args.dropout is not None else 0.5)
+        model, base = build_xception(img_size, dropout=args.dropout if args.dropout is not None else 0.5,
+                                     gray=not args.no_grayscale)
         set_backbone_trainable(base, None)
         h1 = fit_phase(model, train_ds, val_ds, args.warmup_epochs, 1e-3, ckpt, cw,
                        "phase1-head", args, patience=6)
@@ -305,13 +340,14 @@ def train_one(model_key, args, tag=""):
                          best_so_far=h1.best_monitor)
     else:
         model = build_cnn(img_size, separable=(model_key == "scnn"),
-                          dropout=args.dropout if args.dropout is not None else 0.5)
+                          dropout=args.dropout if args.dropout is not None else 0.5,
+                          gray=not args.no_grayscale)
         hist = fit_phase(model, train_ds, val_ds, args.epochs, args.lr, ckpt, cw, "scratch",
                          args, patience=args.patience)
 
     with open(out_dir / f"best_model_{model_key}{tag}.json", "w") as f:
         json.dump({"model": model_key, "img_size": img_size, "class_names": CLASS_NAMES,
-                   "clahe": args.clahe, "hflip": not args.no_hflip, "mixup": args.mixup,
+                   "clahe": args.clahe, "hflip": not args.no_hflip, "mixup": args.mixup, "cutout": args.cutout, "grayscale": not args.no_grayscale,
                    "label_smoothing": args.label_smoothing, "weight_decay": args.weight_decay,
                    "cw_power": args.cw_power, "monitor": args.monitor,
                    "data": str(args.data),
@@ -342,6 +378,10 @@ def main():
     ap.add_argument("--mixup", type=float, default=0.2, help="mixup alpha; 0 disables")
     ap.add_argument("--cw-power", type=float, default=0.5,
                     help="class-weight exponent: 0 none, 0.5 dampened (default), 1 fully balanced")
+    ap.add_argument("--cutout", type=float, default=0.25,
+                    help="max side fraction of the random erased box; 0 disables")
+    ap.add_argument("--no-grayscale", action="store_true",
+                    help="keep colour (default: fixed luminance layer inside the model)")
     ap.add_argument("--monitor", choices=["loss", "macro_f1"], default="loss")
     ap.add_argument("--only-folds", type=int, nargs="*", default=None,
                     help="with --cv: train just these fold indices (e.g. 0 3)")
