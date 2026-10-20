@@ -94,7 +94,21 @@ def build_augmenter(hflip: bool):
     return keras.Sequential(aug, name="augment")
 
 
-def make_datasets(data_dir: Path, img_size: int, batch: int, clahe: bool, hflip: bool):
+def mixup_batch(alpha):
+    """Batch-level mixup: blends each image with a shuffled partner. Strong
+    regulariser on ~1k-image problems; labels become soft."""
+    def fn(x, y):
+        g1 = tf.random.gamma([], alpha)
+        g2 = tf.random.gamma([], alpha)
+        lam = g1 / (g1 + g2)
+        idx = tf.random.shuffle(tf.range(tf.shape(x)[0]))
+        return (lam * x + (1 - lam) * tf.gather(x, idx),
+                lam * y + (1 - lam) * tf.gather(y, idx))
+    return fn
+
+
+def make_datasets(data_dir: Path, img_size: int, batch: int, clahe: bool, hflip: bool,
+                  mixup: float = 0.0):
     for split in ("train", "valid", "test"):
         for c in CLASS_NAMES:
             (data_dir / split / c).mkdir(parents=True, exist_ok=True)
@@ -123,20 +137,29 @@ def make_datasets(data_dir: Path, img_size: int, batch: int, clahe: bool, hflip:
     train_ds = (train_ds
                 .cache()
                 .shuffle(512, seed=42)
-                .map(lambda x, y: (augmenter(x, training=True), y), num_parallel_calls=AUTOTUNE)
-                .prefetch(AUTOTUNE))
+                .map(lambda x, y: (augmenter(x, training=True), y), num_parallel_calls=AUTOTUNE))
+    if mixup > 0:
+        train_ds = train_ds.map(mixup_batch(mixup), num_parallel_calls=AUTOTUNE)
+    train_ds = train_ds.prefetch(AUTOTUNE)
     val_ds = val_ds.cache().prefetch(AUTOTUNE)
     test_ds = test_ds.cache().prefetch(AUTOTUNE)
     return train_ds, val_ds, test_ds
 
 
-def class_weights_from_dir(train_dir: Path):
+def class_weights_from_dir(train_dir: Path, power: float = 0.5):
+    """Inverse-frequency weights raised to `power`. 1.0 = fully balanced (which
+    on tiny classes makes a handful of images dominate the loss and drives
+    memorisation); 0.5 keeps minority classes audible without that."""
     counts = Counter()
     for i, c in enumerate(CLASS_NAMES):
         counts[i] = sum(1 for _ in (train_dir / c).glob("*") if _.is_file())
     total = sum(counts.values())
     present = [i for i in counts if counts[i] > 0]
-    return {i: (total / (len(present) * counts[i])) if counts[i] else 0.0 for i in counts}, counts
+    raw = {i: (total / (len(present) * counts[i])) ** power if counts[i] else 0.0
+           for i in counts}
+    # renormalise so the mean sample weight stays ~1 (keeps the LR meaningful)
+    mean = sum(raw[i] * counts[i] for i in counts) / max(total, 1)
+    return {i: (w / mean if mean else w) for i, w in raw.items()}, counts
 
 
 # ==========================================================================
@@ -222,28 +245,41 @@ def metrics_list():
     return m
 
 
-def monitor_name(model):
-    return "val_macro_f1" if any(m.name == "macro_f1" for m in model.metrics) else "val_acc"
+def make_optimizer(lr, weight_decay):
+    if weight_decay > 0 and hasattr(keras.optimizers, "AdamW"):
+        return keras.optimizers.AdamW(lr, weight_decay=weight_decay)
+    return keras.optimizers.Adam(lr)
 
 
-def fit_phase(model, train_ds, val_ds, epochs, lr, ckpt, cw, tag, patience=8):
+def fit_phase(model, train_ds, val_ds, epochs, lr, ckpt, cw, tag, args, patience=8,
+              best_so_far=None):
     model.compile(
-        optimizer=keras.optimizers.Adam(lr),
-        loss=keras.losses.CategoricalCrossentropy(label_smoothing=0.05),
+        optimizer=make_optimizer(lr, args.weight_decay),
+        loss=keras.losses.CategoricalCrossentropy(label_smoothing=args.label_smoothing),
         metrics=metrics_list(),
     )
-    mon = "val_macro_f1" if any(getattr(m, "name", "") == "macro_f1" for m in model.metrics) else "val_acc"
+    # val_loss is far less noisy than val macro-F1 on a validation set of a few
+    # dozen images (one image can swing a rare class's F1 from 0 to 1)
+    if args.monitor == "macro_f1" and any(getattr(m, "name", "") == "macro_f1"
+                                          for m in model.metrics):
+        mon, mode = "val_macro_f1", "max"
+    else:
+        mon, mode = "val_loss", "min"
     cbs = [
-        keras.callbacks.ModelCheckpoint(ckpt, monitor=mon, mode="max", save_best_only=True, verbose=1),
-        keras.callbacks.EarlyStopping(monitor=mon, mode="max", patience=patience,
+        keras.callbacks.ModelCheckpoint(ckpt, monitor=mon, mode=mode, save_best_only=True, verbose=1,
+                                        initial_value_threshold=best_so_far),
+        keras.callbacks.EarlyStopping(monitor=mon, mode=mode, patience=patience,
                                       restore_best_weights=True, verbose=1),
-        keras.callbacks.ReduceLROnPlateau(monitor=mon, mode="max", factor=0.3,
+        keras.callbacks.ReduceLROnPlateau(monitor=mon, mode=mode, factor=0.3,
                                           patience=max(3, patience // 2), min_lr=1e-7, verbose=1),
         keras.callbacks.CSVLogger(str(Path(ckpt).with_suffix("")) + f"_{tag}_history.csv"),
     ]
-    print(f"\n--- {tag}: {epochs} epochs @ lr={lr} ---")
-    return model.fit(train_ds, validation_data=val_ds, epochs=epochs,
+    print(f"\n--- {tag}: {epochs} epochs @ lr={lr} (monitor {mon}) ---")
+    hist = model.fit(train_ds, validation_data=val_ds, epochs=epochs,
                      class_weight=cw, callbacks=cbs, verbose=1)
+    vals = hist.history.get(mon)
+    hist.best_monitor = (min(vals) if mode == "min" else max(vals)) if vals else None
+    return hist
 
 
 def train_one(model_key, args, tag=""):
@@ -253,27 +289,32 @@ def train_one(model_key, args, tag=""):
     ckpt = str(out_dir / f"best_model_{model_key}{tag}.keras")
 
     train_ds, val_ds, _ = make_datasets(Path(args.data), img_size, args.batch_size,
-                                        args.clahe, not args.no_hflip)
-    cw, counts = class_weights_from_dir(Path(args.data) / "train")
+                                        args.clahe, not args.no_hflip, args.mixup)
+    cw, counts = class_weights_from_dir(Path(args.data) / "train", args.cw_power)
     print("\nTrain images per class:", {CLASS_NAMES[i]: c for i, c in sorted(counts.items()) if c})
 
     if model_key == "xception":
-        model, base = build_xception(img_size, dropout=args.dropout or 0.3)
+        model, base = build_xception(img_size, dropout=args.dropout if args.dropout is not None else 0.5)
         set_backbone_trainable(base, None)
-        fit_phase(model, train_ds, val_ds, args.warmup_epochs, 1e-3, ckpt, cw, "phase1-head", patience=6)
+        h1 = fit_phase(model, train_ds, val_ds, args.warmup_epochs, 1e-3, ckpt, cw,
+                       "phase1-head", args, patience=6)
         n = set_backbone_trainable(base, args.unfreeze_from, args.train_bn)
         print(f"Unfroze {n} backbone layers from '{args.unfreeze_from}' onward (BN frozen={not args.train_bn})")
         hist = fit_phase(model, train_ds, val_ds, args.epochs, args.ft_lr, ckpt, cw, "phase2-finetune",
-                         patience=args.patience)
+                         args, patience=args.patience,
+                         best_so_far=h1.best_monitor)
     else:
         model = build_cnn(img_size, separable=(model_key == "scnn"),
-                          dropout=args.dropout or 0.4)
+                          dropout=args.dropout if args.dropout is not None else 0.5)
         hist = fit_phase(model, train_ds, val_ds, args.epochs, args.lr, ckpt, cw, "scratch",
-                         patience=args.patience)
+                         args, patience=args.patience)
 
     with open(out_dir / f"best_model_{model_key}{tag}.json", "w") as f:
         json.dump({"model": model_key, "img_size": img_size, "class_names": CLASS_NAMES,
-                   "clahe": args.clahe, "hflip": not args.no_hflip,
+                   "clahe": args.clahe, "hflip": not args.no_hflip, "mixup": args.mixup,
+                   "label_smoothing": args.label_smoothing, "weight_decay": args.weight_decay,
+                   "cw_power": args.cw_power, "monitor": args.monitor,
+                   "data": str(args.data),
                    "input_range": "0-255 (preprocessing is inside the model)",
                    "gradcam_layer": "gradcam_target"}, f, indent=2)
     print(f"\nSaved {ckpt}")
@@ -292,9 +333,18 @@ def main():
     ap.add_argument("--warmup-epochs", type=int, default=12)
     ap.add_argument("--lr", type=float, default=1e-3, help="scratch models")
     ap.add_argument("--ft-lr", type=float, default=1e-5, help="fine-tuning LR for Xception")
-    ap.add_argument("--unfreeze-from", default="block12", help="Xception block to unfreeze from")
+    ap.add_argument("--unfreeze-from", default="block13",
+                    help="Xception block to unfreeze from (later = fewer trainable params = less overfit)")
     ap.add_argument("--dropout", type=float, default=None,
-                    help="head dropout; raise it (0.5-0.7) to fight overfitting")
+                    help="head dropout (default 0.5; try 0.6-0.7 if still overfitting)")
+    ap.add_argument("--label-smoothing", type=float, default=0.1)
+    ap.add_argument("--weight-decay", type=float, default=1e-4, help="AdamW decoupled weight decay")
+    ap.add_argument("--mixup", type=float, default=0.2, help="mixup alpha; 0 disables")
+    ap.add_argument("--cw-power", type=float, default=0.5,
+                    help="class-weight exponent: 0 none, 0.5 dampened (default), 1 fully balanced")
+    ap.add_argument("--monitor", choices=["loss", "macro_f1"], default="loss")
+    ap.add_argument("--only-folds", type=int, nargs="*", default=None,
+                    help="with --cv: train just these fold indices (e.g. 0 3)")
     ap.add_argument("--train-bn", action="store_true", help="also fine-tune BatchNorm (usually worse on small data)")
     ap.add_argument("--patience", type=int, default=10)
     ap.add_argument("--clahe", action="store_true", help="CLAHE contrast enhancement")
@@ -318,6 +368,8 @@ def main():
         folds = sorted(p for p in Path(args.cv).glob("fold_*") if p.is_dir())
         if not folds:
             raise SystemExit(f"no fold_* directories under {args.cv}")
+        if args.only_folds is not None:
+            folds = [f for f in folds if int(f.name.split("_")[1]) in args.only_folds]
         for f in folds:
             args.data = str(f)
             for k in keys:

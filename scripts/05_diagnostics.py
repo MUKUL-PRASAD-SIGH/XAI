@@ -111,10 +111,12 @@ def report(name, y, probs, lines):
     if len(vent_present) >= 2:
         names = [CLASS_NAMES[i].replace("-ventriculomegaly", "") for i in VENT]
         cm = confusion_matrix(y, yp, labels=VENT)
+        # images predicted OUTSIDE the family would otherwise vanish from the table
+        outside = np.array([int(((y == v) & ~np.isin(yp, VENT)).sum()) for v in VENT])
         P("   confusion among the three severities (rows = true, cols = predicted)")
-        P("            " + "".join(f"{n:>10}" for n in names))
+        P("            " + "".join(f"{n:>10}" for n in names) + f"{'other':>10}")
         for i, n in enumerate(names):
-            P(f"   {n:>8} " + "".join(f"{v:>10}" for v in cm[i]))
+            P(f"   {n:>8} " + "".join(f"{v:>10}" for v in cm[i]) + f"{outside[i]:>10}")
         within = cm.sum()
         total_vent = int(np.isin(y, VENT).sum())
         P(f"   {within}/{total_vent} ventriculomegaly images were predicted as SOME "

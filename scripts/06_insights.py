@@ -142,7 +142,8 @@ def analyse(key, ckpt, data_dir, batch, L):
     mf1 = f1_score(y, yp, labels=present, average="macro", zero_division=0)
     wf1 = f1_score(y, yp, labels=present, average="weighted", zero_division=0)
     f_lo, f_hi = bootstrap_ci(y, yp,
-                              lambda a, b: f1_score(a, b, average="macro", zero_division=0))
+                              lambda a, b: f1_score(a, b, labels=sorted(set(a.tolist())),
+                                                    average="macro", zero_division=0))
     line(f"   accuracy           {acc:.3f}", L)
     line(f"   balanced accuracy  {bal:.3f}   (mean per-class recall)", L)
     line(f"   macro F1           {mf1:.3f}   95% bootstrap CI [{f_lo:.3f}, {f_hi:.3f}]", L)
@@ -150,7 +151,7 @@ def analyse(key, ckpt, data_dir, batch, L):
     rng = np.random.default_rng(0)
     prior = np.array([counts.get(i, 0) for i in range(len(CLASS_NAMES))]) / n
     null = np.array([f1_score(y, rng.choice(len(CLASS_NAMES), n, p=prior),
-                              average="macro", zero_division=0) for _ in range(2000)])
+                              labels=present, average="macro", zero_division=0) for _ in range(2000)])
     line(f"   chance macro-F1    {null.mean():.3f}   P(chance >= observed) = "
          f"{(null >= mf1).mean():.3f}", L)
 
@@ -163,7 +164,7 @@ def analyse(key, ckpt, data_dir, batch, L):
         yy = np.concatenate([b.numpy() for _, b in ds]).argmax(1)
         pp = model.predict(ds, verbose=0).argmax(1)
         line(f"   {sp:<6} accuracy {accuracy_score(yy, pp):.3f}   "
-             f"macro-F1 {f1_score(yy, pp, average='macro', zero_division=0):.3f}   "
+             f"macro-F1 {f1_score(yy, pp, labels=sorted(set(yy.tolist())), average='macro', zero_division=0):.3f}   "
              f"n={len(yy)}", L)
     hist = sorted(ckpt.parent.glob(f"{ckpt.stem}*history.csv"))
     if hist:
@@ -203,7 +204,7 @@ def analyse(key, ckpt, data_dir, batch, L):
             ab = [i for i in range(len(CLASS_NAMES)) if i != NORMAL]
             yps = np.array(ab)[probs[m][:, ab].argmax(1)]
             line(f"   abnormality-only accuracy       {accuracy_score(y[m], yps):.3f}   "
-                 f"macro-F1 {f1_score(y[m], yps, average='macro', zero_division=0):.3f}  "
+                 f"macro-F1 {f1_score(y[m], yps, labels=sorted(set(y[m].tolist())), average='macro', zero_division=0):.3f}  "
                  f"(n={int(m.sum())})", L)
             line("   -> the gap between these two lines is the confound.", L)
     return model

@@ -15,10 +15,22 @@ Classes listed in the rebuild's `train_only_classes` are excluded from the
 metrics automatically, because they have no held-out case and reporting a score
 for them would be meaningless. They are named in the output so the exclusion is
 explicit rather than hidden.
+
+Reported numbers (one definition, so they cannot disagree between sections):
+  * macro-averages run over the classes that have at least one test image
+    (minus train-only classes), pooled over all folds;
+  * the majority-class baseline gets REAL precision/recall/F1 computed from its
+    constant prediction, not zeros;
+  * 95 % CIs come from a CASE-level bootstrap (images of one case are resampled
+    together), because images of one patient are not independent;
+  * an exact one-sided binomial test says whether accuracy beats the baseline.
 """
 
 import argparse
+import csv
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -38,8 +50,24 @@ CLASS_NAMES = [
     "mild-ventriculomegaly", "moderate-ventriculomegaly", "normal",
     "polencephaly", "severe-ventriculomegaly", "vein-of-galen",
 ]
+_spec = importlib.util.spec_from_file_location(
+    "audit_mod", Path(__file__).with_name("01_dataset_audit.py"))
+_audit = importlib.util.module_from_spec(_spec)
+sys.modules["audit_mod"] = _audit
+_spec.loader.exec_module(_audit)
+parse_name = _audit.parse_name
+
 PRETTY = {"cnn": "CNN", "scnn": "S-CNN", "xception": "Xception"}
 AUTOTUNE = tf.data.AUTOTUNE
+
+
+def load_class_names(root: Path):
+    """class_names.json written by 02b / 07 wins over the built-in 16 classes."""
+    for d in (root, root.parent):
+        p = d / "class_names.json"
+        if p.exists():
+            return json.loads(p.read_text())
+    return None
 
 
 def load_test(data_dir: Path, img_size: int, batch: int):
@@ -49,7 +77,8 @@ def load_test(data_dir: Path, img_size: int, batch: int):
         data_dir / "test", labels="inferred", label_mode="categorical",
         class_names=CLASS_NAMES, image_size=(img_size, img_size),
         batch_size=batch, shuffle=False)
-    return ds.prefetch(AUTOTUNE)
+    files = list(ds.file_paths)
+    return ds.prefetch(AUTOTUNE), files
 
 
 def predict(model, ds, tta: bool):
@@ -98,9 +127,38 @@ def eval_one(ckpt: Path, data_dir: Path, batch, tta):
     cfg = json.loads(cfg_p.read_text()) if cfg_p.exists() else {}
     model = keras.models.load_model(ckpt)
     size = cfg.get("img_size") or model.input_shape[1]
-    ds = load_test(data_dir, size, batch)
+    ds, files = load_test(data_dir, size, batch)
+    n_out = model.output_shape[-1]
+    if n_out != len(CLASS_NAMES):
+        raise SystemExit(f"{ckpt.name} has {n_out} outputs but the dataset has "
+                         f"{len(CLASS_NAMES)} classes; wrong --models/--data pairing?")
     y = np.concatenate([b.numpy() for _, b in ds]).argmax(1)
-    return y, predict(model, ds, tta)
+    return y, predict(model, ds, tta), files
+
+
+def case_ids(files):
+    """Cluster key for the bootstrap: the case a file belongs to."""
+    return np.array([f"{Path(f).parent.name}/{parse_name(Path(f))[1]}" for f in files])
+
+
+def bootstrap_ci(y, yp, keep, cases, n_boot=1000, seed=0):
+    """95 % CI of accuracy and macro-F1, resampling whole cases."""
+    rng = np.random.default_rng(seed)
+    uniq, inv = np.unique(cases, return_inverse=True)
+    members = [np.where(inv == i)[0] for i in range(len(uniq))]
+    acc, f1 = [], []
+    for _ in range(n_boot):
+        pick = rng.integers(0, len(uniq), len(uniq))
+        idx = np.concatenate([members[i] for i in pick])
+        sc = scores(y[idx], yp[idx], [k for k in keep if (y[idx] == k).any()])
+        acc.append(sc["accuracy"]); f1.append(sc["f1"])
+    return (np.percentile(acc, [2.5, 97.5]).tolist(), np.percentile(f1, [2.5, 97.5]).tolist())
+
+
+def binom_p_greater(k, n, p0):
+    """Exact one-sided P(X >= k) for X ~ Binomial(n, p0)."""
+    from scipy.stats import binom
+    return float(binom.sf(k - 1, n, p0))
 
 
 def main():
@@ -116,6 +174,12 @@ def main():
     if not (a.data or a.cv):
         raise SystemExit("pass --data ./dataset_rebuilt or --cv ./dataset_cv")
 
+    global CLASS_NAMES
+    names = load_class_names(Path(a.cv or a.data))
+    if names:
+        CLASS_NAMES = names
+        print(f"class names from class_names.json: {len(names)} classes")
+
     mdir, out = Path(a.models), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -129,19 +193,21 @@ def main():
     results, pooled, y_all, per_fold = {}, {}, {}, {}
 
     for key in ("cnn", "scnn", "xception"):
-        ys, ps, fold_names = [], [], []
+        ys, ps, fold_names, fl, fold_id = [], [], [], [], []
         if a.cv:
             for fold in sorted(p for p in Path(a.cv).glob("fold_*") if p.is_dir()):
                 ck = mdir / f"best_model_{key}_{fold.name}.keras"
                 if not ck.exists():
                     continue
-                y, p = eval_one(ck, fold, a.batch_size, a.tta)
+                y, p, files = eval_one(ck, fold, a.batch_size, a.tta)
                 ys.append(y); ps.append(p); fold_names.append(fold.name)
+                fl += files; fold_id += [fold.name] * len(y)
         else:
             ck = mdir / f"best_model_{key}.keras"
             if ck.exists():
-                y, p = eval_one(ck, Path(a.data), a.batch_size, a.tta)
+                y, p, files = eval_one(ck, Path(a.data), a.batch_size, a.tta)
                 ys.append(y); ps.append(p)
+                fl += files; fold_id += ["single"] * len(y)
         if not ys:
             print(f"skip {key} (no checkpoints in {mdir})")
             continue
@@ -152,6 +218,16 @@ def main():
         keep = [i for i in present if CLASS_NAMES[i] not in train_only]
         yp = p.argmax(1)
         results[PRETTY[key]] = scores(y, yp, keep)
+        m = np.isin(y, keep)
+        cases = case_ids(fl)
+        acc_ci, f1_ci = bootstrap_ci(y[m], yp[m], keep, cases[m])
+        results[PRETTY[key]].update(acc_ci=acc_ci, f1_ci=f1_ci, n_cases=int(len(set(cases[m]))))
+        with open(out / f"predictions_{key}.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["fold", "file", "true", "pred"] + [f"p_{c}" for c in CLASS_NAMES])
+            for fo, fi, t, pr, pp in zip(fold_id, fl, y, yp, p):
+                w.writerow([fo, Path(fi).name, CLASS_NAMES[t], CLASS_NAMES[pr]]
+                           + [f"{v:.4f}" for v in pp])
         plot_cm(y, yp, keep, f"{PRETTY[key]} — pooled test", out / f"confusion_{key}.png")
         m = np.isin(y, keep)
         (out / f"per_class_{key}.txt").write_text(
@@ -159,7 +235,10 @@ def main():
                                   target_names=[CLASS_NAMES[i] for i in keep],
                                   zero_division=0, digits=3))
         s = results[PRETTY[key]]
-        print(f"{PRETTY[key]:<10} n={s['n']:<5} acc={s['accuracy']:.3f} macro-F1={s['f1']:.3f}")
+        print(f"{PRETTY[key]:<10} n={s['n']:<5} acc={s['accuracy']:.3f} "
+              f"[{s['acc_ci'][0]:.3f}-{s['acc_ci'][1]:.3f}]  macro-F1={s['f1']:.3f} "
+              f"[{s['f1_ci'][0]:.3f}-{s['f1_ci'][1]:.3f}]  over {len(keep)} classes, "
+              f"{s['n_cases']} cases")
 
         # per-fold spread: with this few cases, one number hides everything
         if a.cv and len(ys) > 1:
@@ -186,6 +265,14 @@ def main():
             print(f"    *** WARNING: looks like majority-class collapse. "
                   f"Accuracy here is not evidence of learning; read macro-F1. ***")
         results[PRETTY[key]]["majority_baseline"] = float(maj_acc)
+        # the baseline predicts `maj` for everything: score it with the same function
+        results[PRETTY[key]]["_baseline_scores"] = scores(
+            y, np.full_like(y, maj), keep)
+        k_ok = int(round(s["accuracy"] * s["n"]))
+        pv = binom_p_greater(k_ok, s["n"], maj_acc)
+        results[PRETTY[key]]["p_vs_majority"] = pv
+        print(f"    accuracy vs majority baseline: exact binomial p = {pv:.3f} "
+              f"({'beats' if pv < 0.05 else 'NOT distinguishable from'} baseline)")
 
     if a.ensemble and len(pooled) > 1 and len({v.shape for v in pooled.values()}) == 1:
         key0 = next(iter(y_all))
@@ -196,18 +283,21 @@ def main():
         plot_cm(y, ens.argmax(1), keep, "Ensemble — pooled test", out / "confusion_ensemble.png")
 
     if results:
-        base = next(iter(results.values())).get("majority_baseline")
-        if base is not None:
-            results["Majority-class baseline"] = dict(
-                accuracy=base, precision=0.0, recall=0.0, f1=0.0,
-                precision_w=0.0, recall_w=0.0, f1_w=0.0, n=0)
+        first = next(iter(results.values()))
+        if "_baseline_scores" in first:
+            results["Majority-class baseline"] = first["_baseline_scores"]
+        for v in results.values():
+            v.pop("_baseline_scores", None)
 
-    md = ["| Model | Accuracy | Precision | Recall | F1-score |", "|---|---|---|---|---|"]
+    md = ["| Model | Accuracy (95% CI) | Precision | Recall | Macro-F1 (95% CI) |",
+          "|---|---|---|---|---|"]
     tex = [r"\begin{tabular}{|l|c|c|c|c|}", r"\hline",
            r"Model & Accuracy & Precision & Recall & F1-score \\ \hline"]
     for name, s in results.items():
-        md.append(f"| {name} | {s['accuracy']*100:.1f}% | {s['precision']:.2f} | "
-                  f"{s['recall']:.2f} | {s['f1']:.2f} |")
+        ci_a = (f" ({s['acc_ci'][0]*100:.0f}-{s['acc_ci'][1]*100:.0f})" if "acc_ci" in s else "")
+        ci_f = (f" ({s['f1_ci'][0]:.2f}-{s['f1_ci'][1]:.2f})" if "f1_ci" in s else "")
+        md.append(f"| {name} | {s['accuracy']*100:.1f}%{ci_a} | {s['precision']:.2f} | "
+                  f"{s['recall']:.2f} | {s['f1']:.2f}{ci_f} |")
         tex.append(f"{name} & {s['accuracy']*100:.1f}\\% & {s['precision']:.2f} & "
                    f"{s['recall']:.2f} & {s['f1']:.2f} \\\\ \\hline")
     tex.append(r"\end{tabular}")

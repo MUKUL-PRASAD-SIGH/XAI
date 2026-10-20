@@ -192,6 +192,8 @@ def main():
 
     # ---- grouped k-fold -----------------------------------------------------
     if a.folds and a.folds > 1:
+        raise SystemExit("--folds is retired: it was not stratified and used a neighbouring "
+                         "test fold as validation. Use 02b_make_cv_folds.py instead.")
         rng = random.Random(a.seed)
         fold_of = {}
         for cls in sorted(cases_per_class):
