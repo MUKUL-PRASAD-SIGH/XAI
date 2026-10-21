@@ -324,6 +324,9 @@ def train_one(model_key, args, tag=""):
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     ckpt = str(out_dir / f"best_model_{model_key}{tag}.keras")
+    if args.skip_existing and Path(ckpt).exists():
+        print(f"skip {ckpt} (already trained)")
+        return ckpt
 
     train_ds, val_ds, _ = make_datasets(Path(args.data), img_size, args.batch_size,
                                         args.clahe, not args.no_hflip, args.mixup, args.cutout)
@@ -386,6 +389,8 @@ def main():
     ap.add_argument("--no-grayscale", action="store_true",
                     help="keep colour (default: fixed luminance layer inside the model)")
     ap.add_argument("--monitor", choices=["loss", "macro_f1"], default="loss")
+    ap.add_argument("--skip-existing", action="store_true",
+                    help="do not retrain a fold whose checkpoint already exists (resume)")
     ap.add_argument("--only-folds", type=int, nargs="*", default=None,
                     help="with --cv: train just these fold indices (e.g. 0 3)")
     ap.add_argument("--train-bn", action="store_true", help="also fine-tune BatchNorm (usually worse on small data)")
