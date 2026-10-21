@@ -1,0 +1,26 @@
+source_dataset,original_label,task,harmonized_class,mapping_status,proposed_family,family_mapping_status,n_images_eligible,n_independent_groups,supports_stratified_cv
+roboflow_fetal_brain,anold-chiari-malformation,classification,anold-chiari-malformation,identity (original label preserved),posterior_fossa,PROPOSED from configs/class_hierarchy.json; not clinically validated,50,4,False
+roboflow_fetal_brain,arachnoid-cyst,classification,arachnoid-cyst,identity (original label preserved),focal_lesion,PROPOSED from configs/class_hierarchy.json; not clinically validated,139,5,True
+roboflow_fetal_brain,cerebellah-hypoplasia,classification,cerebellah-hypoplasia,identity (original label preserved),posterior_fossa,PROPOSED from configs/class_hierarchy.json; not clinically validated,83,4,False
+roboflow_fetal_brain,colphocephaly,classification,colphocephaly,identity (original label preserved),ventricular,PROPOSED from configs/class_hierarchy.json; not clinically validated,73,2,False
+roboflow_fetal_brain,encephalocele,classification,encephalocele,identity (original label preserved),focal_lesion,PROPOSED from configs/class_hierarchy.json; not clinically validated,146,7,True
+roboflow_fetal_brain,holoprosencephaly,classification,holoprosencephaly,identity (original label preserved),forebrain_cavitary,PROPOSED from configs/class_hierarchy.json; not clinically validated,12,1,False
+roboflow_fetal_brain,hydracenphaly,classification,hydracenphaly,identity (original label preserved),forebrain_cavitary,PROPOSED from configs/class_hierarchy.json; not clinically validated,20,2,False
+roboflow_fetal_brain,intracranial-hemorrdge,classification,intracranial-hemorrdge,identity (original label preserved),focal_lesion,PROPOSED from configs/class_hierarchy.json; not clinically validated,58,3,False
+roboflow_fetal_brain,intracranial-tumor,classification,intracranial-tumor,identity (original label preserved),focal_lesion,PROPOSED from configs/class_hierarchy.json; not clinically validated,14,1,False
+roboflow_fetal_brain,m-magna,classification,m-magna,identity (original label preserved),posterior_fossa,PROPOSED from configs/class_hierarchy.json; not clinically validated,38,1,False
+roboflow_fetal_brain,mild-ventriculomegaly,classification,mild-ventriculomegaly,identity (original label preserved),ventricular,PROPOSED from configs/class_hierarchy.json; not clinically validated,246,9,True
+roboflow_fetal_brain,moderate-ventriculomegaly,classification,moderate-ventriculomegaly,identity (original label preserved),ventricular,PROPOSED from configs/class_hierarchy.json; not clinically validated,261,8,True
+roboflow_fetal_brain,normal,classification,normal,identity (original label preserved),always_separate,PROPOSED from configs/class_hierarchy.json; not clinically validated,282,31,True
+roboflow_fetal_brain,polencephaly,classification,polencephaly,identity (original label preserved),forebrain_cavitary,PROPOSED from configs/class_hierarchy.json; not clinically validated,98,5,True
+roboflow_fetal_brain,severe-ventriculomegaly,classification,severe-ventriculomegaly,identity (original label preserved),ventricular,PROPOSED from configs/class_hierarchy.json; not clinically validated,126,3,False
+roboflow_fetal_brain,vein-of-galen,classification,vein-of-galen,identity (original label preserved),focal_lesion,PROPOSED from configs/class_hierarchy.json; not clinically validated,5,2,False
+fhu_trans_cerebellum,Brain,anatomy_segmentation,anatomy:Brain,"structure label, not a diagnosis",,n/a,681,,
+fhu_trans_cerebellum,CSP,anatomy_segmentation,anatomy:CSP,"structure label, not a diagnosis",,n/a,352,,
+fhu_trans_cerebellum,LV,anatomy_segmentation,anatomy:LV,"structure label, not a diagnosis",,n/a,2,,
+fhu_trans_ventricular,Brain,anatomy_segmentation,anatomy:Brain,"structure label, not a diagnosis",,n/a,555,,
+fhu_trans_ventricular,CSP,anatomy_segmentation,anatomy:CSP,"structure label, not a diagnosis",,n/a,347,,
+fhu_trans_ventricular,LV,anatomy_segmentation,anatomy:LV,"structure label, not a diagnosis",,n/a,459,,
+fhu_diverse_head,Brain,anatomy_segmentation,anatomy:Brain,"structure label, not a diagnosis",,n/a,999,,
+fhu_diverse_head,CSP,anatomy_segmentation,anatomy:CSP,"structure label, not a diagnosis",,n/a,408,,
+fhu_diverse_head,LV,anatomy_segmentation,anatomy:LV,"structure label, not a diagnosis",,n/a,510,,
