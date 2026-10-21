@@ -74,3 +74,7 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# ─── Source archives & extracted public datasets (licence/size: do not commit) ─
+/*.zip
+datasets/final_build_*/extracted/
