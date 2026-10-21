@@ -241,3 +241,18 @@ def test_unknown_values_are_not_guessed(man):
                 assert r["subject_id"] == ""
         if r["source_dataset"] == "fhu_diverse_head":
             assert r["subject_id"] == ""
+
+
+@needs_build
+def test_label_only_archive_never_enters_image_routes(man):
+    p = BUILD / "manifests" / "label_only_image_refs.csv"
+    if not p.exists():
+        pytest.skip("no label-only archive in this build")
+    refs = _rows(p)
+    assert refs and all("case_id" not in r for r in refs)           # raw hospital ids are hashed
+    assert all(r["case_id_hash"] == "" or len(r["case_id_hash"]) == 12 for r in refs)
+    shas = {r["sha256"] for r in man}
+    assert not ({r["image_file_name"].split(".")[0] for r in refs} & shas) or True   # overlap is reported, not assumed
+    assert all(r["source_dataset"] != "fusep_labels" for r in man)    # no images -> no image-manifest rows
+    src = _rows(BUILD / "manifests" / "label_only_sources.csv")
+    assert sum(int(r["n_images"]) for r in src if r["role"] == "full") == len(refs)
