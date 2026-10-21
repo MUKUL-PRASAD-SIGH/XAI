@@ -33,6 +33,15 @@ Interpretation: the shipped split is NOT leakage-free. Augmented copies of the s
 
 Reliable, documented subject identifiers do not exist for the Roboflow data. Groups there are filename-derived heuristics. Subject IDs for the Fetal-Head Trans-* sets are filename tokens; they are used as grouping keys but are not independently documented.
 
+## FUSEP label-only archive
+
+- Hospital1_SZ/CRL: 4 case_ids present in BOTH train and test (patient-level leakage)
+- Hospital1_SZ/NT: 8 case_ids present in BOTH train and test (patient-level leakage)
+- Hospital3_YN/CRL: 1 case_ids present in BOTH train and test (patient-level leakage)
+- Hospital3_YN/NT: 1 case_ids present in BOTH train and test (patient-level leakage)
+- Hospital2_SC: every image has the same case_id placeholder -> no usable subject information
+- Overlap with the brain datasets cannot be assessed beyond file hashes: the images are absent. Subject-level independence is only checkable where `case_id` is real (not Hospital2_SC).
+
 ## Verification of previously reported numbers
 
 ### 16 original classes

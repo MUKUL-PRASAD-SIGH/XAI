@@ -83,6 +83,10 @@ SOURCES = {
         coco="Diverse Fetal Head Images/Test-Dataset-COCO.zip", pix=None, license=FHU_LICENSE,
         attribution="Readme.txt", plane="diverse/unspecified", plane_basis="source archive name (mixed head planes; per-image plane not documented)"),
 }
+LABEL_ONLY = {   # annotation archives WITHOUT images: audited and inventoried, never routed into image manifests
+    "fusep_labels": dict(zip="ahuteam FUSEP main labels.zip",
+                         quality={"\u6807\u51c6": "standard", "\u975e\u6807\u51c6": "non-standard",
+                                  "\u57fa\u672c\u6807\u51c6": "basically standard"})}
 README_CLAIMS = dict(images=3832, brain=3794, csp=1865, lv=1512)
 MASK_COLORS = {"Brain": (255, 0, 0), "CSP": (0, 255, 0), "LV": (0, 0, 255)}  # from labelmap.txt (verified at runtime)
 
@@ -289,6 +293,95 @@ def stage_extract(root, bd, log):
         inv[key]["extract"] = st
         log(f"extracted {key}: {st['n']} new, {st['skipped_existing']} already present, {len(st['unsafe'])} unsafe skipped")
     return ext_root, inv
+
+
+def stage_label_only(root, bd, S, log):
+    """COCO-style label archives with no images (FUSEP). Extract JSON safely, profile, check split hygiene."""
+    S["fusep"], rows_files, rows_imgs = None, [], []
+    for key, cfg in LABEL_ONLY.items():
+        zp = root / cfg["zip"]
+        if not zp.exists():
+            log(f"label-only source {cfg['zip']} not present; skipped")
+            continue
+        zf = zipfile.ZipFile(zp)
+        st = extract_zip(zf, bd / "extracted" / key, lambda i: i.filename.lower().endswith(".json"))
+        info = dict(zip=cfg["zip"], bytes=zp.stat().st_size, sha256=sha256_file(zp), entries=len(zf.infolist()),
+                    ext=dict(Counter(Path(i.filename).suffix.lower() for i in zf.infolist() if not i.is_dir())),
+                    corrupt_member=zf.testzip(), extract=st, cats={})
+        data = {}
+        for i in sorted(zf.infolist(), key=lambda i: i.filename):
+            if i.is_dir() or not i.filename.endswith(".json"):
+                continue
+            hosp, nm = i.filename.split("/")
+            task, _, role = nm[:-5].partition("_")
+            j = json.loads(zf.read(i))
+            data[(hosp, task, role or "full")] = j
+            qc = Counter(cfg["quality"].get(a.get("standard"), a.get("standard")) for a in j["annotations"])
+            imgs = j["images"]
+            rows_files.append(dict(hospital=hosp, task=task, role=role or "full", n_images=len(imgs),
+                                   n_annotations=len(j["annotations"]),
+                                   n_distinct_case_ids=len({x.get("case_id") for x in imgs}),
+                                   plane_quality_counts=";".join(f"{k}={v}" for k, v in sorted(qc.items())) or None,
+                                   json_path=f"{key}/{i.filename}"))
+            info["cats"].setdefault(hosp, []).append(sorted({c["name"] for c in j["categories"]}))
+        issues = []
+        mem = defaultdict(lambda: defaultdict(set))
+        for (h, t, role), j in data.items():
+            mem[(h, t)][role] = {x["file_name"] for x in j["images"]}
+        for (h, t), m in sorted(mem.items()):
+            if m.get("train") and m.get("test") and m["train"] & m["test"]:
+                issues.append(f"{h}/{t}: {len(m['train'] & m['test'])} images in BOTH train and test")
+            if "full" in m and (m.get("train", set()) | m.get("test", set())) != m["full"]:
+                issues.append(f"{h}/{t}: train+test != full ({len((m['train'] | m['test']) ^ m['full'])} differences)")
+            for r in ("label_5", "label_10"):
+                if m.get(r) and not m[r] <= m["train"]:
+                    issues.append(f"{h}/{t}: {r} not a subset of train ({len(m[r] - m['train'])} outside)")
+            for k in ("5", "10"):
+                if m.get("label_" + k, set()) & m.get("unlabel_" + k, set()):
+                    issues.append(f"{h}/{t}: label_{k} and unlabel_{k} overlap")
+        placeholder = {h for (h, t, r), j in data.items()
+                       if r == "full" and len({x.get("case_id") for x in j["images"]}) == 1}
+        case_split = {}
+        for (h, t, role), j in data.items():
+            if role in ("train", "test"):
+                case_split.setdefault((h, t), {})[role] = {x.get("case_id") for x in j["images"]}
+        for (h, t), d in sorted(case_split.items()):
+            if h not in placeholder and d.get("train") and d.get("test") and d["train"] & d["test"]:
+                issues.append(f"{h}/{t}: {len(d['train'] & d['test'])} case_ids present in BOTH train and test "
+                              "(patient-level leakage)")
+        for h in sorted(placeholder):
+            issues.append(f"{h}: every image has the same case_id placeholder -> no usable subject information")
+        both = defaultdict(set)
+        for (h, t, role), j in data.items():
+            if role == "full":
+                for x in j["images"]:
+                    both[(h, x["file_name"])].add(t)
+        for (h, t, role), j in sorted(data.items()):
+            if role != "full":
+                continue
+            other = "NT" if t == "CRL" else "CRL"
+            boxes = defaultdict(Counter)
+            for a in j["annotations"]:
+                boxes[a["image_id"]][cfg["quality"].get(a.get("standard"), a.get("standard"))] += 1
+            for x in j["images"]:
+                nm = x["file_name"]
+                b = boxes[x["id"]]
+                rows_imgs.append(dict(
+                    hospital=h, task=t, image_file_name=nm, width=x.get("width"), height=x.get("height"),
+                    case_id_hash=("" if h in placeholder else hashlib.sha256(str(x.get("case_id")).encode()).hexdigest()[:12]),
+                    n_boxes=sum(b.values()), n_boxes_standard=b["standard"], n_boxes_non_standard=b["non-standard"],
+                    n_boxes_basically_standard=b["basically standard"],
+                    in_train=nm in mem[(h, t)].get("train", set()), in_test=nm in mem[(h, t)].get("test", set()),
+                    in_label_5=nm in mem[(h, t)].get("label_5", set()), in_label_10=nm in mem[(h, t)].get("label_10", set()),
+                    also_in_other_task=other in both[(h, nm)]))
+        allnames = {x["file_name"] for j in data.values() for x in j["images"]}
+        info.update(unique_images=len(allnames), issues=issues, placeholder_hospitals=sorted(placeholder),
+                    cats={h: sorted({n for c in v for n in c}) for h, v in info["cats"].items()})
+        S["fusep"] = info
+        S["fusep_names"] = {n.split(".")[0] for n in allnames}
+        log(f"{key}: {len(data)} json files, {len(allnames)} unique referenced images (images NOT included), "
+            f"{len(issues)} audit notes")
+    return rows_files, rows_imgs
 
 
 # ==========================================================================
@@ -743,6 +836,30 @@ def make_reports(bd, recs, pairs, sens, inv, S, args, cv_rows):
         L.append(f"- {k}: {e['n']} files written, {e['skipped_existing']} already present, unsafe paths skipped: {len(e['unsafe'])}"
                  + (f" ({e['unsafe'][:3]})" if e["unsafe"] else ""))
     L += ["", f"Totals: {len(recs)} images read, {uniq_sha} unique by SHA-256 across all sources. Unreadable images: 0 (all decoded)."]
+    fu = S.get("fusep")
+    if fu:
+        L += ["", "## Label-only archive: FUSEP (`%s`)" % fu["zip"], "",
+              f"- {fu['entries']} entries, {sum(fu['ext'].values())} JSON files, {fu['bytes'] / 1e6:.0f} MB, zip integrity "
+              f"{'ok' if fu['corrupt_member'] is None else 'CORRUPT'}; SHA-256 `{fu['sha256']}`. **It contains no images**, no README and no "
+              "licence text (licence and attribution: unknown; obtain them from the dataset owners).",
+              "- Content: COCO-style bounding boxes in 3 hospital folders (Hospital1_SZ, Hospital2_SC, Hospital3_YN), two tasks (CRL, NT; taken "
+              "from file names, their expansion is not documented in the archive), with `train`, `test` and semi-supervised subsets "
+              "`label_5/label_10/unlabel_5/unlabel_10`.",
+              "- Each box carries a plane-quality value in Chinese (standard / non-standard / basically standard). The English renderings are my "
+              "translation and should be confirmed.",
+              "- Box categories (anatomical landmarks): " + "; ".join(f"{h}: {', '.join(c)}" for h, c in fu["cats"].items()),
+              f"- {fu['unique_images']} distinct hashed image names are referenced; **{fu['sha_overlap_with_image_sources']}** of them equal the "
+              "SHA-256 of an image in the other archives (no overlap detectable; the images themselves are unavailable here).",
+              "- Annotation type: landmark/structure bounding boxes + image-quality labels. **No diagnosis, no normal/abnormal label, no mask.** "
+              "It is first-trimester-style data (CRL / NT), a different gestational stage and task from the fetal-brain diagnosis set.",
+              "- Routing: `label_only` -> not in `image_manifest.csv`, `classification/` or `auxiliary_anatomy/` (no images to attach labels to). "
+              "Tables: `manifests/label_only_sources.csv` (one row per json) and `manifests/label_only_image_refs.csv` (one row per referenced "
+              "image; raw `case_id` values are replaced by a 12-char hash so hospital identifiers are not copied).", "",
+              md_table(["hospital", "task", "role", "images", "boxes", "distinct case_ids", "plane quality"],
+                       [[r["hospital"], r["task"], r["role"], r["n_images"], r["n_annotations"], r["n_distinct_case_ids"],
+                         r["plane_quality_counts"] or "-"] for r in S["fusep_rows"]]), "",
+              "Split-hygiene findings (verified from the JSON):", ""]
+        L += [f"- {x}" for x in fu["issues"]] or ["- none"]
     (rep / "dataset_inventory.md").write_text("\n".join(L), encoding="utf-8")
 
     # ---------------- label audit
@@ -900,6 +1017,11 @@ def make_reports(bd, recs, pairs, sens, inv, S, args, cv_rows):
           "## Patient-level statement", "",
           "Reliable, documented subject identifiers do not exist for the Roboflow data. Groups there are filename-derived heuristics. "
           "Subject IDs for the Fetal-Head Trans-* sets are filename tokens; they are used as grouping keys but are not independently documented."]
+    if S.get("fusep"):
+        L += ["", "## FUSEP label-only archive", ""]
+        L += [f"- {x}" for x in S["fusep"]["issues"]] or ["- no split issues found"]
+        L += ["- Overlap with the brain datasets cannot be assessed beyond file hashes: the images are absent. Subject-level independence is "
+              "only checkable where `case_id` is real (not Hospital2_SC)."]
     L += ["", "## Verification of previously reported numbers", ""]
     for name, v in S["legacy"].items():
         L += [f"### {name}", "",
@@ -1003,6 +1125,7 @@ def make_readme(bd, recs, S, args, inv, n_cls, n_aux, n_unr):
          "plus one extra file, `duplicate_pairs.csv` (pairwise evidence with hash distances).",
          "- `classification/`, `auxiliary_anatomy/`, `unresolved/` hold **CSV manifests only** (no image copies; paths point into `extracted/`) "
          "to avoid duplicating ~1 GB. `classification/class_summary.csv` is an extra summary.",
+         "- `manifests/label_only_sources.csv`, `label_only_image_refs.csv`: the FUSEP label-only archive (no images, no diagnoses; audited, not routed to any training set).",
          "- `reports/` dataset_inventory, label_audit, duplicate_audit, leakage_audit, data_quality_report.",
          "- `scripts/` is a snapshot of the pipeline script used; the maintained copy is `scripts/14_build_unified_dataset.py` in the repository.",
          "- Empty cells in CSVs mean null/unavailable (never a guessed value).", "",
@@ -1058,6 +1181,10 @@ def main():
     assign_eval_roles(recs)
     cv_rows = build_cv(recs, args.folds, S)
     legacy_numbers(ext_root / "roboflow_fetal_brain", S)
+    lo_files, lo_imgs = stage_label_only(args.root, bd, S, log)
+    S["fusep_rows"] = lo_files
+    if S["fusep"]:
+        S["fusep"]["sha_overlap_with_image_sources"] = len(S["fusep_names"] & {r["sha"] for r in recs})
 
     # ---------------- manifests
     mf = bd / "manifests"
@@ -1160,6 +1287,9 @@ def main():
     if ux:
         write_csv(bd / "unresolved" / "unresolved_images.csv", ucols, ux)
 
+    if lo_files:
+        write_csv(mf / "label_only_sources.csv", list(lo_files[0].keys()), lo_files)
+        write_csv(mf / "label_only_image_refs.csv", list(lo_imgs[0].keys()), lo_imgs)
     make_reports(bd, recs, pairs, sens, inv, S, args, cv_rows)
     make_readme(bd, recs, S, args, inv, len(cl), len(ax), len(ux))
 
@@ -1173,7 +1303,8 @@ def main():
     (bd / "run_info.json").write_text(json.dumps(dict(
         built_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), git_commit=commit,
         python=platform.python_version(), numpy=np.__version__, args={k: str(v) for k, v in vars(args).items()},
-        archives={SOURCES[k]["zip"]: inv[k]["sha256"] for k in SOURCES},
+        archives={**{SOURCES[k]["zip"]: inv[k]["sha256"] for k in SOURCES},
+                  **({S["fusep"]["zip"]: S["fusep"]["sha256"]} if S["fusep"] else {})},
         counts=dict(images=len(recs), unique_sha=len({r["sha"] for r in recs}), classification=len(cl), auxiliary=len(ax),
                     unresolved=len(ux), case_groups=len(by_g))), indent=2))
     log(f"classification={len(cl)} auxiliary={len(ax)} unresolved={len(ux)}  groups={len(by_g)}")

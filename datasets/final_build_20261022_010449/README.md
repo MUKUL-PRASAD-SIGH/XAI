@@ -18,6 +18,7 @@ Archive checksums are in `run_info.json`; parameters: near-duplicate = dHash<=6 
 - `extracted/<source>/` safe extraction, one directory per source (git-ignored). Only the Segmentation and COCO nested archives were extracted; the other 9 redundant export formats per Fetal-Head zip are inventoried only.
 - `manifests/` image_manifest.csv, label_mapping.csv, duplicate_groups.csv, case_groups.csv, proposed_cv_manifest.csv plus one extra file, `duplicate_pairs.csv` (pairwise evidence with hash distances).
 - `classification/`, `auxiliary_anatomy/`, `unresolved/` hold **CSV manifests only** (no image copies; paths point into `extracted/`) to avoid duplicating ~1 GB. `classification/class_summary.csv` is an extra summary.
+- `manifests/label_only_sources.csv`, `label_only_image_refs.csv`: the FUSEP label-only archive (no images, no diagnoses; audited, not routed to any training set).
 - `reports/` dataset_inventory, label_audit, duplicate_audit, leakage_audit, data_quality_report.
 - `scripts/` is a snapshot of the pipeline script used; the maintained copy is `scripts/14_build_unified_dataset.py` in the repository.
 - Empty cells in CSVs mean null/unavailable (never a guessed value).

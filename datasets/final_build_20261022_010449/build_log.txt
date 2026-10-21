@@ -1,5 +1,5 @@
 build directory: C:\Users\Mukul Prasad\Desktop\PROJECTS\XAI\datasets\final_build_20261022_010449
-disk: need ~0.81 GB for extraction, free 11.76 GB
+disk: need ~0.81 GB for extraction, free 11.03 GB
 extracted roboflow_fetal_brain: 0 new, 1773 already present, 0 unsafe skipped
 extracted fhu_trans_cerebellum: 0 new, 685 already present, 0 unsafe skipped
 extracted fhu_trans_ventricular: 0 new, 585 already present, 0 unsafe skipped
@@ -10,4 +10,5 @@ read 584 images from fhu_trans_ventricular
 read 999 images from fhu_diverse_head
 duplicate pairs: Counter({'near': 713, 'exact': 123})
 case groups: 1751; largest sizes [88, 74, 48, 46, 45, 45, 45, 44]
+fusep_labels: 42 json files, 4017 unique referenced images (images NOT included), 5 audit notes
 classification=1651 auxiliary=2267 unresolved=117  groups=1751

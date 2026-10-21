@@ -92,3 +92,66 @@ Each Fetal-Head zip carries 11 redundant re-exports of the same annotations. Onl
 - fhu_diverse_head: 0 files written, 999 already present, unsafe paths skipped: 0
 
 Totals: 4035 images read, 3912 unique by SHA-256 across all sources. Unreadable images: 0 (all decoded).
+
+## Label-only archive: FUSEP (`ahuteam FUSEP main labels.zip`)
+
+- 45 entries, 42 JSON files, 30 MB, zip integrity ok; SHA-256 `4ca9ca60b24a16a0964a649534d10ae08c376997affb5e4bdc65f05d66814b25`. **It contains no images**, no README and no licence text (licence and attribution: unknown; obtain them from the dataset owners).
+- Content: COCO-style bounding boxes in 3 hospital folders (Hospital1_SZ, Hospital2_SC, Hospital3_YN), two tasks (CRL, NT; taken from file names, their expansion is not documented in the archive), with `train`, `test` and semi-supervised subsets `label_5/label_10/unlabel_5/unlabel_10`.
+- Each box carries a plane-quality value in Chinese (standard / non-standard / basically standard). The English renderings are my translation and should be confirmed.
+- Box categories (anatomical landmarks): Hospital1_SZ: AB, B, C, DP, G, H, LV, MDS, MLS, MX, NB, NT, NTAPS, RBP; Hospital2_SC: AB, B, C, DP, G, H, LV, MDS, MLS, MX, NB, NT, NTAPS, RBP; Hospital3_YN: AB, B, C, DP, G, H, LV, MDS, MLS, MX, NB, NT, NTAPS, RBP
+- 4017 distinct hashed image names are referenced; **0** of them equal the SHA-256 of an image in the other archives (no overlap detectable; the images themselves are unavailable here).
+- Annotation type: landmark/structure bounding boxes + image-quality labels. **No diagnosis, no normal/abnormal label, no mask.** It is first-trimester-style data (CRL / NT), a different gestational stage and task from the fetal-brain diagnosis set.
+- Routing: `label_only` -> not in `image_manifest.csv`, `classification/` or `auxiliary_anatomy/` (no images to attach labels to). Tables: `manifests/label_only_sources.csv` (one row per json) and `manifests/label_only_image_refs.csv` (one row per referenced image; raw `case_id` values are replaced by a 12-char hash so hospital identifiers are not copied).
+
+| hospital | task | role | images | boxes | distinct case_ids | plane quality |
+|---|---|---|---|---|---|---|
+| Hospital1_SZ | CRL | full | 766 | 6875 | 756 | basically standard=43;non-standard=4327;standard=2505 |
+| Hospital1_SZ | CRL | label_10 | 61 | 539 | 61 | non-standard=358;standard=181 |
+| Hospital1_SZ | CRL | label_5 | 30 | 273 | 30 | non-standard=190;standard=83 |
+| Hospital1_SZ | CRL | test | 154 | 1395 | 154 | basically standard=12;non-standard=811;standard=572 |
+| Hospital1_SZ | CRL | train | 612 | 5480 | 606 | basically standard=31;non-standard=3516;standard=1933 |
+| Hospital1_SZ | CRL | unlabel_10 | 551 | 0 | 547 | - |
+| Hospital1_SZ | CRL | unlabel_5 | 582 | 0 | 576 | - |
+| Hospital1_SZ | NT | full | 766 | 6610 | 753 | basically standard=17;non-standard=4271;standard=2322 |
+| Hospital1_SZ | NT | label_10 | 61 | 518 | 61 | non-standard=325;standard=193 |
+| Hospital1_SZ | NT | label_5 | 30 | 253 | 30 | non-standard=187;standard=66 |
+| Hospital1_SZ | NT | test | 154 | 1311 | 154 | non-standard=877;standard=434 |
+| Hospital1_SZ | NT | train | 612 | 5299 | 607 | basically standard=17;non-standard=3394;standard=1888 |
+| Hospital1_SZ | NT | unlabel_10 | 551 | 0 | 546 | - |
+| Hospital1_SZ | NT | unlabel_5 | 582 | 0 | 578 | - |
+| Hospital2_SC | CRL | full | 737 | 7323 | 1 | basically standard=40;non-standard=2341;standard=4942 |
+| Hospital2_SC | CRL | label_10 | 58 | 562 | 1 | non-standard=197;standard=365 |
+| Hospital2_SC | CRL | label_5 | 29 | 270 | 1 | non-standard=93;standard=177 |
+| Hospital2_SC | CRL | test | 148 | 1464 | 1 | basically standard=11;non-standard=420;standard=1033 |
+| Hospital2_SC | CRL | train | 589 | 5859 | 1 | basically standard=29;non-standard=1921;standard=3909 |
+| Hospital2_SC | CRL | unlabel_10 | 531 | 0 | 1 | - |
+| Hospital2_SC | CRL | unlabel_5 | 560 | 0 | 1 | - |
+| Hospital2_SC | NT | full | 759 | 6958 | 1 | basically standard=11;non-standard=3320;standard=3627 |
+| Hospital2_SC | NT | label_10 | 60 | 531 | 1 | non-standard=288;standard=243 |
+| Hospital2_SC | NT | label_5 | 30 | 271 | 1 | non-standard=92;standard=179 |
+| Hospital2_SC | NT | test | 152 | 1417 | 1 | non-standard=729;standard=688 |
+| Hospital2_SC | NT | train | 607 | 5541 | 1 | basically standard=11;non-standard=2591;standard=2939 |
+| Hospital2_SC | NT | unlabel_10 | 547 | 0 | 1 | - |
+| Hospital2_SC | NT | unlabel_5 | 577 | 0 | 1 | - |
+| Hospital3_YN | CRL | full | 486 | 9044 | 482 | basically standard=96;non-standard=5104;standard=3844 |
+| Hospital3_YN | CRL | label_10 | 38 | 706 | 38 | non-standard=346;standard=360 |
+| Hospital3_YN | CRL | label_5 | 19 | 344 | 19 | non-standard=204;standard=140 |
+| Hospital3_YN | CRL | test | 98 | 1858 | 98 | basically standard=36;non-standard=948;standard=874 |
+| Hospital3_YN | CRL | train | 388 | 7186 | 385 | basically standard=60;non-standard=4156;standard=2970 |
+| Hospital3_YN | CRL | unlabel_10 | 350 | 0 | 348 | - |
+| Hospital3_YN | CRL | unlabel_5 | 369 | 0 | 367 | - |
+| Hospital3_YN | NT | full | 503 | 9010 | 488 | basically standard=36;non-standard=6562;standard=2412 |
+| Hospital3_YN | NT | label_10 | 40 | 642 | 40 | basically standard=20;non-standard=474;standard=148 |
+| Hospital3_YN | NT | label_5 | 20 | 340 | 20 | non-standard=224;standard=116 |
+| Hospital3_YN | NT | test | 101 | 1836 | 101 | non-standard=1382;standard=454 |
+| Hospital3_YN | NT | train | 402 | 7172 | 388 | basically standard=36;non-standard=5178;standard=1958 |
+| Hospital3_YN | NT | unlabel_10 | 362 | 0 | 354 | - |
+| Hospital3_YN | NT | unlabel_5 | 382 | 0 | 371 | - |
+
+Split-hygiene findings (verified from the JSON):
+
+- Hospital1_SZ/CRL: 4 case_ids present in BOTH train and test (patient-level leakage)
+- Hospital1_SZ/NT: 8 case_ids present in BOTH train and test (patient-level leakage)
+- Hospital3_YN/CRL: 1 case_ids present in BOTH train and test (patient-level leakage)
+- Hospital3_YN/NT: 1 case_ids present in BOTH train and test (patient-level leakage)
+- Hospital2_SC: every image has the same case_id placeholder -> no usable subject information
