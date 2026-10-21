@@ -98,6 +98,7 @@ def cutout_batch(max_frac=0.25):
     """Erase one random rectangle per image (filled with the image mean). Stops the
     network leaning on a single corner overlay / caliper / text label."""
     def fn(x, y):
+        x = tf.cast(x, tf.float32)
         shp = tf.shape(x)
         b, h, w = shp[0], shp[1], shp[2]
         fh = tf.cast(tf.cast(h, tf.float32) * tf.random.uniform([b], 0.08, max_frac), tf.int32)
@@ -128,6 +129,8 @@ def mixup_batch(alpha):
     """Batch-level mixup: blends each image with a shuffled partner. Strong
     regulariser on ~1k-image problems; labels become soft."""
     def fn(x, y):
+        # mixed precision makes the dataset emit float16 labels; mix in float32
+        x, y = tf.cast(x, tf.float32), tf.cast(y, tf.float32)
         g1 = tf.random.gamma([], alpha)
         g2 = tf.random.gamma([], alpha)
         lam = g1 / (g1 + g2)
