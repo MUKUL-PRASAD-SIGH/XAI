@@ -175,3 +175,12 @@ One notebook, `notebooks/run_full_cv_colab.ipynb`, runs everything from the data
 | probe | `13_cv_probe.py` | frozen-feature logistic regression on the same folds (overfitting check) |
 
 Details: `docs/cross_validation.md`. Pre-CV scripts that were copied from Drive are kept in `legacy/`.
+
+
+## Unified dataset audit (no training)
+
+`python scripts/14_build_unified_dataset.py` audits every source zip in the repo root (Roboflow 16-class diagnosis set, three
+'Fetal Head Ultrasound' anatomy-mask sets, and the label-only FUSEP bounding-box archive) and writes
+`datasets/final_build_<timestamp>/` with manifests, duplicate/leakage reports and a proposed grouped CV manifest.
+Only the Roboflow set carries diagnoses; FUSEP has no images and no diagnoses. See that directory's `README.md` and `reports/`.
+Tests: `python -m pytest tests/test_unified_build.py`.
