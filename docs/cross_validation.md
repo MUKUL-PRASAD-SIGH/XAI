@@ -52,3 +52,32 @@ analysis. Per-fold mean +/- sd is in the table when there are several folds.
   A high normal-vs-abnormal score is not evidence of clinical recognition.
 * The class families in `configs/class_map_cv.json` are my grouping by anatomy, not a clinical
   ruling. They carry `_review` notes; have a clinician approve them before publishing.
+
+## Auditing a finished run and using the Fetal-Head anatomy sets
+
+`scripts/16_audit_cv_results.py` is read-only (no training, no model loading, new output dir required):
+
+```bash
+python scripts/16_audit_cv_results.py --cv ./dataset_cv --results ./results_cv \
+    --models ./models_cv --probe ./results_probe --out ./audit_cv_<tag>
+```
+
+It reports artifact inventory (CNN / S-CNN / Xception checkpoints), images vs independent groups,
+per-class precision/recall/F1/support, the confusion matrix, group and SHA-256 overlap between folds,
+classes absent from a test fold, and group-bootstrap CIs next to the binomial test (which assumes
+independent images and is therefore anti-conservative here). Verified findings and untested
+hypotheses are listed separately.
+
+The Trans-cerebellum / Trans-ventricular / Diverse Fetal Head sets have anatomy masks only (no diagnoses),
+and the FUSEP archive has labels but no images. They are therefore used for a pretext task, not merged
+into the diagnosis classes:
+
+```bash
+python scripts/14_build_unified_dataset.py --root <dir with the zips>
+python scripts/15_pretrain_anatomy.py --build-dir datasets/final_build_<ts> --out ./anatomy_pretrain
+python scripts/03_train.py --cv ./dataset_cv --model xception --out ./models_cv_anat \
+    --init-backbone ./anatomy_pretrain/xception_anatomy_backbone.weights.h5
+```
+
+Compare against the ImageNet-initialised run with the same folds; keep the pretraining only if the
+group-bootstrap macro-F1 CI clearly improves. CNN / S-CNN: `03_train.py --model cnn|scnn` (notebook cell 8d).

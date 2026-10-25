@@ -45,14 +45,20 @@ XAI/
 │       ├── explainability.py
 │       └── report_generator.py
 ├── scripts/
-│   ├── inventory.py                  # Read-only dataset scan
-│   ├── validate_labels.py            # Label map sanity checks
-│   ├── detect_duplicates.py          # Hash-based duplicate detection
-│   ├── split_dataset.py              # Train/val/test splitting
-│   └── extract_metadata.py           # DICOM / NIfTI metadata
+│   ├── 01_dataset_audit.py           # leakage / duplicate audit
+│   ├── 02b_make_cv_folds.py          # stratified grouped k-fold builder
+│   ├── 02c_design_classes.py         # data-driven class design
+│   ├── 03_train.py                   # CNN / S-CNN / Xception (--init-backbone)
+│   ├── 04_evaluate.py                # pooled CV evaluation, CIs, baseline
+│   ├── 13_cv_probe.py                # frozen-feature probe on the same folds
+│   ├── 14_build_unified_dataset.py   # audit-only unified dataset build
+│   ├── 15_pretrain_anatomy.py        # Fetal-Head anatomy pretraining
+│   ├── 16_audit_cv_results.py        # read-only audit of a finished CV run
+│   └── inventory.py, detect_duplicates.py, validate_labels.py, ...
 ├── tests/
-│   ├── test_data_loader.py
-│   └── test_pipeline_safety.py
+│   ├── test_cv_folds.py
+│   ├── test_pipeline_sanity.py
+│   └── test_unified_build.py
 ├── docs/
 │   ├── architecture.md
 │   ├── data_access.md
