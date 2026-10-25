@@ -336,6 +336,9 @@ def train_one(model_key, args, tag=""):
     if model_key == "xception":
         model, base = build_xception(img_size, dropout=args.dropout if args.dropout is not None else 0.5,
                                      gray=not args.no_grayscale)
+        if args.init_backbone:
+            base.load_weights(args.init_backbone)
+            print(f"Backbone initialised from {args.init_backbone} (anatomy pretraining)")
         set_backbone_trainable(base, None)
         h1 = fit_phase(model, train_ds, val_ds, args.warmup_epochs, 1e-3, ckpt, cw,
                        "phase1-head", args, patience=6)
@@ -356,7 +359,7 @@ def train_one(model_key, args, tag=""):
                    "clahe": args.clahe, "hflip": not args.no_hflip, "mixup": args.mixup, "cutout": args.cutout, "grayscale": not args.no_grayscale,
                    "label_smoothing": args.label_smoothing, "weight_decay": args.weight_decay,
                    "cw_power": args.cw_power, "monitor": args.monitor,
-                   "data": str(args.data),
+                   "data": str(args.data), "init_backbone": args.init_backbone,
                    "input_range": "0-255 (preprocessing is inside the model)",
                    "gradcam_layer": "gradcam_target"}, f, indent=2)
     print(f"\nSaved {ckpt}")
@@ -377,6 +380,9 @@ def main():
     ap.add_argument("--ft-lr", type=float, default=1e-5, help="fine-tuning LR for Xception")
     ap.add_argument("--unfreeze-from", default="block13",
                     help="Xception block to unfreeze from (later = fewer trainable params = less overfit)")
+    ap.add_argument("--init-backbone", default=None,
+                    help="Xception backbone weights (.weights.h5) from 15_pretrain_anatomy.py; "
+                         "replaces the ImageNet start (xception only)")
     ap.add_argument("--dropout", type=float, default=None,
                     help="head dropout (default 0.5; try 0.6-0.7 if still overfitting)")
     ap.add_argument("--label-smoothing", type=float, default=0.1)

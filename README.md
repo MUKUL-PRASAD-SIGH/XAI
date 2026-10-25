@@ -184,3 +184,24 @@ Details: `docs/cross_validation.md`. Pre-CV scripts that were copied from Drive 
 `datasets/final_build_<timestamp>/` with manifests, duplicate/leakage reports and a proposed grouped CV manifest.
 Only the Roboflow set carries diagnoses; FUSEP has no images and no diagnoses. See that directory's `README.md` and `reports/`.
 Tests: `python -m pytest tests/test_unified_build.py`.
+
+---
+
+## Using the Fetal-Head anatomy sets (pretraining) and auditing a CV run
+
+The Trans-cerebellum / Trans-ventricular / Diverse Fetal Head archives carry **anatomy masks only**
+(Brain, CSP, LV) and the FUSEP archive is **label-only first-trimester landmarks with no images**, so none of
+them has a diagnosis label. They are not merged into the diagnosis classes. Instead:
+
+```bash
+python scripts/14_build_unified_dataset.py --root <folder with the zips>      # manifests (audit-only)
+python scripts/15_pretrain_anatomy.py --build-dir datasets/final_build_<ts> --out ./anatomy_pretrain
+python scripts/03_train.py --cv ./dataset_cv --model xception --out ./models_cv_anat \
+       --init-backbone ./anatomy_pretrain/xception_anatomy_backbone.weights.h5
+python scripts/16_audit_cv_results.py --cv ./dataset_cv --results ./results_cv --models ./models_cv --out ./audit_cv_<tag>
+```
+
+`15_pretrain_anatomy.py` excludes Fetal-Head images that duplicate a Roboflow image. `16_audit_cv_results.py`
+is read-only: per-class metrics, confusion matrix, group/duplicate checks, group-bootstrap CIs, and a
+verified-vs-hypothesis explanation. The Colab runner (`notebooks/run_full_cv_colab.ipynb`) has cells for all of this,
+including CNN / S-CNN baselines (no checkpoints for them existed in the earlier run).
