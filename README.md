@@ -191,6 +191,17 @@ Details: `docs/cross_validation.md`. Pre-CV scripts that were copied from Drive 
 Only the Roboflow set carries diagnoses; FUSEP has no images and no diagnoses. See that directory's `README.md` and `reports/`.
 Tests: `python -m pytest tests/test_unified_build.py`.
 
+To check whether a newly downloaded export (for example another Roboflow fetal-brain listing) adds anything, pass it as a
+candidate. It is compared against every existing image by SHA-256, dHash/pHash and scan name, and is **never** added to
+the manifests or folds:
+
+```bash
+python scripts/14_build_unified_dataset.py --build-dir datasets/final_build_<ts> --candidate "<export>.zip"
+```
+
+Results: `reports/candidate_overlap.md` (per-class exact / near / same-scan-name / new counts, and independent new clusters)
+and `manifests/candidate_overlap_<name>.csv` (per-image match and label agreement). `--candidate` can be repeated.
+
 ---
 
 ## Using the Fetal-Head anatomy sets (pretraining) and auditing a CV run

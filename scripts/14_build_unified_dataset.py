@@ -19,6 +19,9 @@ Everything is written under  datasets/final_build_<timestamp>/ :
 
     python scripts/14_build_unified_dataset.py                 # new timestamped build
     python scripts/14_build_unified_dataset.py --build-dir datasets/final_build_X   # rerun in place
+    python scripts/14_build_unified_dataset.py --build-dir datasets/final_build_X --candidate new_export.zip
+        # overlap check only: how many candidate images are already in the existing sources?
+        # candidates are never routed into any manifest or CV fold (reports/candidate_overlap.md)
 """
 
 import argparse
@@ -88,6 +91,13 @@ LABEL_ONLY = {   # annotation archives WITHOUT images: audited and inventoried, 
                          quality={"\u6807\u51c6": "standard", "\u975e\u6807\u51c6": "non-standard",
                                   "\u57fa\u672c\u6807\u51c6": "basically standard"})}
 README_CLAIMS = dict(images=3832, brain=3794, csp=1865, lv=1512)
+# candidate-source class names -> existing class. Spelling/synonym only; flagged as an alias in every output.
+CANDIDATE_ALIASES = {
+    "cisterna-magna": "m-magna", "mega-cisterna-magna": "m-magna",
+    "anold-chiary-malformation": "anold-chiari-malformation", "arnold-chiari-malformation": "anold-chiari-malformation",
+    "cerebellar-hypoplasia": "cerebellah-hypoplasia", "colpocephaly": "colphocephaly",
+    "hydranencephaly": "hydracenphaly", "intracranial-hemorrhage": "intracranial-hemorrdge",
+    "porencephaly": "polencephaly"}
 MASK_COLORS = {"Brain": (255, 0, 0), "CSP": (0, 255, 0), "LV": (0, 0, 255)}  # from labelmap.txt (verified at runtime)
 
 MANIFEST_COLUMNS = [
@@ -184,6 +194,82 @@ POP = audit.POPCOUNT
 
 def hdist(a, b):
     return int(POP[np.bitwise_xor(a, b)].sum())
+
+
+def cross_near(A, B, max_dist, chunk=384):
+    """Hamming neighbours between two hash sets -> [(i in A, j in B, dist)]."""
+    out = []
+    for s in range(0, len(A), chunk):
+        d = POP[np.bitwise_xor(A[s:s + chunk, None, :], B[None, :, :])].sum(2)
+        ii, jj = np.where(d <= max_dist)
+        out += [(int(i + s), int(j), int(d[i, j])) for i, j in zip(ii, jj)]
+    return out
+
+
+def candidate_class(name, classes):
+    """Map a candidate source's class name onto an existing class -> (class or None, basis)."""
+    if not name:
+        return None, "no label in candidate source"
+    if "|" in name:
+        return None, f"multiple classes marked ({name})"
+    n = re.sub(r"[\s_]+", "-", name.strip().lower()).strip("-")
+    if n in classes:
+        return n, "exact name match"
+    if CANDIDATE_ALIASES.get(n) in classes:
+        return CANDIDATE_ALIASES[n], f"alias '{n}' (spelling/synonym; not clinically verified)"
+    return None, f"unmapped class '{name}'"
+
+
+def match_candidates(cands, refs, dh_max, ph_max):
+    """Compare candidate images with the existing records, then with each other. Sets on every candidate:
+    status, match (index into refs or None), match_dh, match_ph, cluster (id shared by linked NEW images).
+    Status priority: exact_duplicate_of_existing > near_duplicate_of_existing > same_scan_name_as_existing > new."""
+    by_sha, by_scan = {}, {}
+    for j, r in enumerate(refs):
+        by_sha.setdefault(r["sha"], j)
+        if r.get("scan"):
+            by_scan.setdefault(r["scan"], j)
+    best = {}
+    if cands and refs:
+        DH, PH = np.stack([r["dh"] for r in refs]), np.stack([r["ph"] for r in refs])
+        CD, CP = np.stack([c["dh"] for c in cands]), np.stack([c["ph"] for c in cands])
+        for i, j, dd in cross_near(CD, DH, dh_max):
+            pd_ = hdist(CP[i], PH[j])
+            if pd_ <= ph_max and (i not in best or (dd + pd_, j) < (best[i][1] + best[i][2], best[i][0])):
+                best[i] = (j, dd, pd_)
+    for i, c in enumerate(cands):
+        c.update(match=None, match_dh=None, match_ph=None, cluster=None)
+        if c["sha"] in by_sha:
+            j = by_sha[c["sha"]]
+            c.update(status="exact_duplicate_of_existing", match=j, match_dh=hdist(c["dh"], refs[j]["dh"]),
+                     match_ph=hdist(c["ph"], refs[j]["ph"]))
+        elif i in best:
+            j, dd, pd_ = best[i]
+            c.update(status="near_duplicate_of_existing", match=j, match_dh=dd, match_ph=pd_)
+        elif c.get("scan") and c["scan"] in by_scan:
+            c.update(status="same_scan_name_as_existing", match=by_scan[c["scan"]])
+        else:
+            c["status"] = "new"
+    new = [i for i, c in enumerate(cands) if c["status"] == "new"]
+    links = []
+    if new:     # new images that are copies / augmentations of each other count once
+        H, P = np.stack([cands[i]["dh"] for i in new]), np.stack([cands[i]["ph"] for i in new])
+        links += [(a, b) for a, b, dd in near_pairs(H, dh_max) if hdist(P[a], P[b]) <= ph_max]
+        first = {}
+        for k, i in enumerate(new):
+            for key in (("sha", cands[i]["sha"]), ("scan", cands[i].get("scan") or None)):
+                if key[1] is None:
+                    continue
+                if key in first:
+                    links.append((first[key], k))
+                else:
+                    first[key] = k
+    root = components(len(new), links)
+    cid = {}
+    for k, i in enumerate(new):
+        cid.setdefault(root[k], f"N{len(cid) + 1:05d}")
+        cands[i]["cluster"] = cid[root[k]]
+    return cands
 
 
 def components(n, links):
@@ -722,6 +808,118 @@ def build_cv(recs, K, S):
 
 
 # ==========================================================================
+# candidate sources: overlap check only, never routed into manifests or CV
+# ==========================================================================
+def gather_candidate(zp, bd, log):
+    """Extract a candidate archive safely and read its images + labels (Roboflow _classes.csv or class folders)."""
+    slug = "candidate_" + re.sub(r"[^a-z0-9]+", "_", zp.stem.lower()).strip("_")
+    d = bd / "extracted" / slug
+    zf = zipfile.ZipFile(zp)
+    st = extract_zip(zf, d, lambda i: Path(i.filename).suffix.lower() in IMG_EXT | {".csv"})
+    hot = {}
+    for cp in d.rglob("_classes.csv"):
+        for x in read_classes_csv(cp)[1]:
+            hot[(cp.parent, x["filename"])] = x["hot"]
+    out, unreadable = [], []
+    for p in sorted(d.rglob("*")):
+        if p.suffix.lower() not in IMG_EXT:
+            continue
+        h = hot.get((p.parent, p.name))
+        if h is not None:
+            raw_label, basis = "|".join(h) or None, "_classes.csv one-hot"
+        elif p.parent != d and p.parent.name.lower() not in ("train", "valid", "test", "images"):
+            raw_label, basis = p.parent.name, "folder name"
+        else:
+            raw_label, basis = None, "none"
+        raw = p.read_bytes()
+        try:
+            f = image_features(raw)
+        except Exception as e:   # reported, not hidden
+            unreadable.append(f"{p.name}: {e}")
+            continue
+        scan, _, aug, _ = parse_name(p)
+        out.append(dict(path=p, relpath=p.relative_to(REPO).as_posix() if REPO in p.parents else str(p), fname=p.name,
+                        scan=scan, aug=aug, sha=hashlib.sha256(raw).hexdigest(), raw_label=raw_label, label_basis=basis, **f))
+    info = dict(zip=zp.name, bytes=zp.stat().st_size, sha256=sha256_file(zp), corrupt_member=zf.testzip(), extract=st,
+                images=len(out), unreadable=unreadable)
+    log(f"candidate {slug}: {len(out)} images read, {len(unreadable)} unreadable, {len(st['unsafe'])} unsafe skipped")
+    return slug, info, out
+
+
+def candidate_overlap(paths, root, bd, recs, classes, S, args, log):
+    """-> {slug: info}; writes manifests/candidate_overlap_<slug>.csv and reports/candidate_overlap.md."""
+    res = {}
+    L = ["# Candidate-source overlap check", "",
+         "Each candidate archive was compared with every image already in this build (all sources). "
+         "**Candidate images are NOT added to any manifest, class, or CV fold** by this script.", "",
+         f"Matching: exact = identical SHA-256; near = dHash <= {args.dh_max} and pHash <= {args.ph_max} (same thresholds as the "
+         "build); same scan name = the file name (Roboflow `.rf.<hash>`, `_aug_N` stripped) equals an existing scan id, "
+         "so it is very likely the same source image re-processed. New images that are copies or augmentations of "
+         "each other are merged into one *new cluster*.", "",
+         "Limits: heavy crops, rotations, or added overlays can defeat the hashes, so `new` is an upper bound. "
+         "A new cluster is a distinct image, not a confirmed new patient.", ""]
+    for zp in paths:
+        zp = zp if zp.exists() else root / zp
+        if not zp.exists():
+            raise SystemExit(f"missing candidate archive: {zp}")
+        slug, info, cands = gather_candidate(zp, bd, log)
+        match_candidates(cands, recs, args.dh_max, args.ph_max)
+        rows = []
+        for c in cands:
+            c["mapped"], c["map_basis"] = candidate_class(c["raw_label"], classes)
+            m = recs[c["match"]] if c["match"] is not None else None
+            ml = m.get("label") if m else None
+            agree = (None if m is None else "existing_has_no_diagnosis" if not ml else "candidate_unmapped" if not c["mapped"]
+                     else "same" if ml == c["mapped"] else "different")
+            c["agree"] = agree
+            rows.append(dict(candidate_image=c["relpath"], candidate_label_raw=c["raw_label"], candidate_label_basis=c["label_basis"],
+                             mapped_class=c["mapped"], mapping_basis=c["map_basis"], status=c["status"],
+                             matched_record_id=m["record_id"] if m else None, matched_source=m["source"] if m else None,
+                             matched_label=ml, matched_path=m["relpath"] if m else None, dhash_dist=c["match_dh"],
+                             phash_dist=c["match_ph"], label_agreement=agree, new_cluster_id=c["cluster"],
+                             is_augmented_copy=c["aug"] is not None, sha256=c["sha"]))
+        write_csv(bd / "manifests" / f"candidate_overlap_{slug}.csv", list(rows[0].keys()) if rows else ["candidate_image"], rows)
+        stc = Counter(c["status"] for c in cands)
+        new = [c for c in cands if c["status"] == "new"]
+        nclu = len({c["cluster"] for c in new})
+        info.update(status_counts=dict(stc), new_images=len(new), new_clusters=nclu,
+                    label_disagreements=sum(1 for c in cands if c["agree"] == "different"))
+        res[slug] = info
+        log(f"candidate {slug}: {dict(stc)}; new clusters {nclu}")
+        L += [f"## `{info['zip']}`", "",
+              f"- SHA-256 `{info['sha256']}`, {info['bytes'] / 1e6:.0f} MB, zip integrity "
+              f"{'ok' if info['corrupt_member'] is None else 'CORRUPT: ' + info['corrupt_member']}",
+              f"- images read: {len(cands)}; unreadable: {len(info['unreadable'])}; unsafe paths skipped: {len(info['extract']['unsafe'])}", "",
+              md_table(["status", "images", "share"], [[k, stc[k], pct(stc[k], len(cands))] for k in
+                       ("exact_duplicate_of_existing", "near_duplicate_of_existing", "same_scan_name_as_existing", "new")]), "",
+              f"**Truly new: {len(new)} images in {nclu} independent new clusters.**", ""]
+        by_c = defaultdict(list)
+        for c in cands:
+            by_c[c["mapped"] or f"(unmapped) {c['raw_label']}"].append(c)
+        gp = S.get("groups_per_class", {})
+        trows = []
+        for k in sorted(by_c, key=lambda k: (k.startswith("(unmapped)"), k)):
+            cs = by_c[k]
+            sc = Counter(c["status"] for c in cs)
+            trows.append([k, len(cs), sc["exact_duplicate_of_existing"], sc["near_duplicate_of_existing"],
+                          sc["same_scan_name_as_existing"], sc["new"], len({c["cluster"] for c in cs if c["status"] == "new"}),
+                          gp.get(k, "")])
+        L += ["### Per class", "", md_table(["class", "candidate images", "exact dup", "near dup", "same scan name", "new images",
+                                            "new clusters", "existing independent groups"], trows), ""]
+        alias = sorted({c["map_basis"] for c in cands if c["map_basis"].startswith("alias")})
+        if alias:
+            L += ["Class names mapped by alias (check these): " + "; ".join(alias), ""]
+        if info["label_disagreements"]:
+            L += [f"**{info['label_disagreements']} matched images carry a DIFFERENT label than the existing copy**; see "
+                  f"`label_agreement=different` in `manifests/candidate_overlap_{slug}.csv`.", ""]
+    L += ["## Next step", "",
+          "Only `new` clusters can add independent data. Before using them: confirm the label source, license and "
+          "attribution, check for overlays/annotations burned into the image, and keep each new cluster in one CV fold."]
+    (bd / "reports" / "candidate_overlap.md").write_text("\n".join(L), encoding="utf-8")
+    return res
+
+
+# ==========================================================================
 # legacy-number reproduction
 # ==========================================================================
 def legacy_numbers(rf_root, S):
@@ -1150,6 +1348,8 @@ def main():
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--dh-max", type=int, default=6, help="near-duplicate: max dHash distance")
     ap.add_argument("--ph-max", type=int, default=8, help="near-duplicate: max pHash distance")
+    ap.add_argument("--candidate", type=Path, action="append", default=[],
+                    help="zip of a possible NEW source; overlap check only, never routed into manifests/CV (repeatable)")
     args = ap.parse_args()
 
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1292,6 +1492,7 @@ def main():
         write_csv(mf / "label_only_image_refs.csv", list(lo_imgs[0].keys()), lo_imgs)
     make_reports(bd, recs, pairs, sens, inv, S, args, cv_rows)
     make_readme(bd, recs, S, args, inv, len(cl), len(ax), len(ux))
+    cand = candidate_overlap(args.candidate, args.root, bd, recs, classes, S, args, log) if args.candidate else {}
 
     # ---------------- run info + script snapshot
     try:
@@ -1306,7 +1507,9 @@ def main():
         archives={**{SOURCES[k]["zip"]: inv[k]["sha256"] for k in SOURCES},
                   **({S["fusep"]["zip"]: S["fusep"]["sha256"]} if S["fusep"] else {})},
         counts=dict(images=len(recs), unique_sha=len({r["sha"] for r in recs}), classification=len(cl), auxiliary=len(ax),
-                    unresolved=len(ux), case_groups=len(by_g))), indent=2))
+                    unresolved=len(ux), case_groups=len(by_g)),
+        candidates={k: dict(zip=v["zip"], sha256=v["sha256"], images=v["images"], status_counts=v["status_counts"],
+                            new_images=v["new_images"], new_clusters=v["new_clusters"]) for k, v in cand.items()}), indent=2))
     log(f"classification={len(cl)} auxiliary={len(ax)} unresolved={len(ux)}  groups={len(by_g)}")
     (bd / "build_log.txt").write_text("\n".join(logf), encoding="utf-8")
     print(f"\nDONE -> {bd}")

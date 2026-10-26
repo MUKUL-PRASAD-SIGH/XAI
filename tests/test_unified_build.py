@@ -97,6 +97,45 @@ def test_greedy_group_folds_balanced():
     assert abs(load[0] - load[1]) <= 1
 
 
+def test_candidate_class_mapping():
+    cls = ["m-magna", "cerebellah-hypoplasia", "normal"]
+    assert ub.candidate_class("normal", cls) == ("normal", "exact name match")
+    assert ub.candidate_class("cerebellah hypoplasia", cls)[0] == "cerebellah-hypoplasia"
+    c, basis = ub.candidate_class("Cisterna Magna", cls)
+    assert c == "m-magna" and basis.startswith("alias")
+    assert ub.candidate_class("normal|m-magna", cls)[0] is None
+    assert ub.candidate_class("dandy-walker", cls)[0] is None
+    assert ub.candidate_class(None, cls)[0] is None
+
+
+def _feat(arr, name, **kw):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.fromarray(arr).save(buf, "PNG")
+    raw = buf.getvalue()
+    return dict(ub.image_features(raw), sha=__import__("hashlib").sha256(raw).hexdigest(), scan=name, **kw)
+
+
+def test_match_candidates_statuses_and_new_clusters():
+    import numpy as np
+    from PIL import Image
+    rng = np.random.default_rng(0)
+    imgs = [(rng.random((64, 64)) * 255).astype("uint8") for _ in range(5)]
+    refs = [_feat(imgs[0], "a-1", source="s", label="normal"), _feat(imgs[1], "b-1", source="s", label="m-magna")]
+    big = np.asarray(Image.fromarray(imgs[1]).resize((128, 128), Image.BILINEAR))
+    cands = [_feat(imgs[0], "x-1"),                     # identical bytes -> exact
+             _feat(big, "y-1"),                         # resized copy -> near
+             _feat(imgs[2], "a-1"),                     # different pixels, existing scan name
+             _feat(imgs[3], "new-1"), _feat(imgs[3], "new-1-copy"),   # same pixels twice -> one cluster
+             _feat(imgs[4], "new-2")]
+    ub.match_candidates(cands, refs, 6, 8)
+    assert [c["status"] for c in cands] == ["exact_duplicate_of_existing", "near_duplicate_of_existing",
+                                            "same_scan_name_as_existing", "new", "new", "new"]
+    assert cands[0]["match"] == 0 and cands[1]["match"] == 1 and cands[2]["match"] == 0
+    assert cands[3]["cluster"] == cands[4]["cluster"] != cands[5]["cluster"]
+    assert all(c["cluster"] is None for c in cands[:3])
+
+
 # ----------------------------------------------------------------- build tests
 def _latest_build():
     d = sorted((REPO / "datasets").glob("final_build_*")) if (REPO / "datasets").exists() else []
