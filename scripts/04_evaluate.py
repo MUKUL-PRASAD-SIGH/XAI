@@ -168,6 +168,8 @@ def main():
     ap.add_argument("--models", default="./models")
     ap.add_argument("--out", default="./results")
     ap.add_argument("--batch-size", type=int, default=16)
+    ap.add_argument("--model", choices=["all", "cnn", "scnn", "xception"], default="all",
+                    help="models required for evaluation; every requested fold must exist")
     ap.add_argument("--tta", action="store_true")
     ap.add_argument("--ensemble", action="store_true")
     a = ap.parse_args()
@@ -181,6 +183,20 @@ def main():
         print(f"class names from class_names.json: {len(names)} classes")
 
     mdir, out = Path(a.models), Path(a.out)
+    keys = ["cnn", "scnn", "xception"] if a.model == "all" else [a.model]
+    root = Path(a.cv or a.data)
+    if not root.is_dir():
+        raise SystemExit(f"Dataset directory missing: {root}. Run dataset setup first.")
+    folds = sorted(p for p in root.glob("fold_*") if p.is_dir()) if a.cv else []
+    if a.cv and not folds:
+        raise SystemExit(f"No fold_* directories under {root}. Build CV folds first.")
+    required = [mdir / f"best_model_{key}_{fold.name}.keras"
+                for key in keys for fold in folds] if a.cv else [
+                    mdir / f"best_model_{key}.keras" for key in keys]
+    missing = [str(p) for p in required if not p.is_file() or p.stat().st_size == 0]
+    if missing:
+        raise SystemExit("Evaluation blocked: missing/empty checkpoints:\n" + "\n".join(missing)
+                         + "\nFinish training all folds, or select the intended --model.")
     out.mkdir(parents=True, exist_ok=True)
 
     root = Path(a.cv or a.data)
@@ -192,7 +208,7 @@ def main():
 
     results, pooled, y_all, per_fold = {}, {}, {}, {}
 
-    for key in ("cnn", "scnn", "xception"):
+    for key in keys:
         ys, ps, fold_names, fl, fold_id = [], [], [], [], []
         if a.cv:
             for fold in sorted(p for p in Path(a.cv).glob("fold_*") if p.is_dir()):

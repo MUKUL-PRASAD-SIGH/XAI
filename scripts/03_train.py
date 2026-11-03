@@ -290,15 +290,16 @@ def make_optimizer(lr, weight_decay):
 
 def fit_phase(model, train_ds, val_ds, epochs, lr, ckpt, cw, tag, args, patience=8,
               best_so_far=None):
+    phase_metrics = metrics_list()
     model.compile(
         optimizer=make_optimizer(lr, args.weight_decay),
         loss=keras.losses.CategoricalCrossentropy(label_smoothing=args.label_smoothing),
-        metrics=metrics_list(),
+        metrics=phase_metrics,
     )
     # val_loss is far less noisy than val macro-F1 on a validation set of a few
     # dozen images (one image can swing a rare class's F1 from 0 to 1)
     if args.monitor == "macro_f1" and any(getattr(m, "name", "") == "macro_f1"
-                                          for m in model.metrics):
+                                          for m in phase_metrics):
         mon, mode = "val_macro_f1", "max"
     else:
         mon, mode = "val_loss", "min"
@@ -423,6 +424,10 @@ def main():
         if not folds:
             raise SystemExit(f"no fold_* directories under {args.cv}")
         if args.only_folds is not None:
+            available = {int(f.name.split("_")[1]) for f in folds}
+            invalid = set(args.only_folds) - available
+            if not args.only_folds or invalid:
+                raise SystemExit(f"Invalid --only-folds; available indices: {sorted(available)}")
             folds = [f for f in folds if int(f.name.split("_")[1]) in args.only_folds]
         for f in folds:
             args.data = str(f)
