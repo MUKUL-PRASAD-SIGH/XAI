@@ -155,6 +155,40 @@ def bootstrap_ci(y, yp, keep, cases, n_boot=1000, seed=0):
     return (np.percentile(acc, [2.5, 97.5]).tolist(), np.percentile(f1, [2.5, 97.5]).tolist())
 
 
+def _case_members(cases):
+    uniq, inv = np.unique(cases, return_inverse=True)
+    return [np.where(inv == i)[0] for i in range(len(uniq))]
+
+
+def case_boot_p_vs_baseline(y, yp, base_acc, cases, n_boot=2000, seed=0):
+    """One-sided p that accuracy <= baseline, resampling whole cases (images of a
+    case are not independent, so the plain binomial test overstates significance)."""
+    rng = np.random.default_rng(seed)
+    members = _case_members(cases)
+    hit = (y == yp).astype(float)
+    worse = 0
+    for _ in range(n_boot):
+        pick = rng.integers(0, len(members), len(members))
+        idx = np.concatenate([members[i] for i in pick])
+        worse += hit[idx].mean() <= base_acc
+    return (worse + 1) / (n_boot + 1)
+
+
+def paired_case_bootstrap(y, yp_a, yp_b, keep, cases, n_boot=1000, seed=0):
+    """Macro-F1 difference (A - B) on the SAME cases: 95 % CI and two-sided p."""
+    rng = np.random.default_rng(seed)
+    members = _case_members(cases)
+    d = []
+    for _ in range(n_boot):
+        pick = rng.integers(0, len(members), len(members))
+        idx = np.concatenate([members[i] for i in pick])
+        k = [c for c in keep if (y[idx] == c).any()]
+        d.append(scores(y[idx], yp_a[idx], k)["f1"] - scores(y[idx], yp_b[idx], k)["f1"])
+    d = np.array(d)
+    p = 2 * min((d <= 0).mean(), (d >= 0).mean())
+    return float(np.mean(d)), np.percentile(d, [2.5, 97.5]).tolist(), float(min(1.0, max(p, 1 / n_boot)))
+
+
 def binom_p_greater(k, n, p0):
     """Exact one-sided P(X >= k) for X ~ Binomial(n, p0)."""
     from scipy.stats import binom
@@ -207,6 +241,7 @@ def main():
         train_only = json.loads(cfg_file.read_text()).get("train_only_classes", [])
 
     results, pooled, y_all, per_fold = {}, {}, {}, {}
+    case_all, keep_all = {}, {}
 
     for key in keys:
         ys, ps, fold_names, fl, fold_id = [], [], [], [], []
@@ -289,6 +324,31 @@ def main():
         results[PRETTY[key]]["p_vs_majority"] = pv
         print(f"    accuracy vs majority baseline: exact binomial p = {pv:.3f} "
               f"({'beats' if pv < 0.05 else 'NOT distinguishable from'} baseline)")
+        pc = case_boot_p_vs_baseline(y[m], yp[m], maj_acc, cases[m])
+        results[PRETTY[key]]["p_vs_majority_case_bootstrap"] = pc
+        print(f"    case-level bootstrap p (images of a case not independent) = {pc:.3f} "
+              f"({'beats' if pc < 0.05 else 'NOT distinguishable from'} baseline)")
+        case_all[key] = cases
+        keep_all[key] = keep
+
+    paired = {}
+    ks = list(pooled)
+    for i in range(len(ks)):
+        for j in range(i + 1, len(ks)):
+            ka, kb = ks[i], ks[j]
+            if y_all[ka].shape != y_all[kb].shape or not (y_all[ka] == y_all[kb]).all():
+                print(f"skip paired test {ka} vs {kb}: test sets differ")
+                continue
+            yk = y_all[ka]; mk = np.isin(yk, keep_all[ka])
+            d, ci, pd_ = paired_case_bootstrap(yk[mk], pooled[ka].argmax(1)[mk],
+                                               pooled[kb].argmax(1)[mk], keep_all[ka],
+                                               case_all[ka][mk])
+            paired[f"{PRETTY[ka]} - {PRETTY[kb]}"] = dict(macro_f1_diff=d, ci=ci, p=pd_)
+            print(f"paired macro-F1 {PRETTY[ka]} - {PRETTY[kb]}: {d:+.3f} "
+                  f"[{ci[0]:+.3f}, {ci[1]:+.3f}] p={pd_:.3f} "
+                  f"({'significant' if ci[0] > 0 or ci[1] < 0 else 'CI includes 0'})")
+    if paired:
+        (out / "paired_comparisons.json").write_text(json.dumps(paired, indent=2))
 
     if a.ensemble and len(pooled) > 1 and len({v.shape for v in pooled.values()}) == 1:
         key0 = next(iter(y_all))

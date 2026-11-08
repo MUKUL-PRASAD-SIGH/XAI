@@ -311,11 +311,16 @@ def fit_phase(model, train_ds, val_ds, epochs, lr, ckpt, cw, tag, args, patience
         keras.callbacks.ReduceLROnPlateau(monitor=mon, mode=mode, factor=0.3,
                                           patience=max(3, patience // 2), min_lr=1e-7, verbose=1),
         keras.callbacks.CSVLogger(str(Path(ckpt).with_suffix("")) + f"_{tag}_history.csv"),
+        keras.callbacks.TerminateOnNaN(),   # a diverged run must not leave a checkpoint behind
     ]
     print(f"\n--- {tag}: {epochs} epochs @ lr={lr} (monitor {mon}) ---")
     hist = model.fit(train_ds, validation_data=val_ds, epochs=epochs,
                      class_weight=cw, callbacks=cbs, verbose=1)
     vals = hist.history.get(mon)
+    losses = hist.history.get("loss", [])
+    if any(not np.isfinite(v) for v in losses + (vals or [])):
+        raise SystemExit(f"{tag}: loss/{mon} became NaN/inf (training diverged). "
+                         f"Delete {ckpt} and retrain; lower --lr or check the data.")
     hist.best_monitor = (min(vals) if mode == "min" else max(vals)) if vals else None
     return hist
 
